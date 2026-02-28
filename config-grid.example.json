@@ -1,0 +1,105 @@
+{
+  "_comment": "Example Grid Bot Configuration",
+  
+  "environment": "testnet",
+  "private_key": "YOUR_PRIVATE_KEY_HEX_WITHOUT_0x",
+  "address": "0xYOUR_WALLET_ADDRESS",
+  "vault_address": null,
+
+  "strategy_type": "grid",
+
+  "instrument": "BTC-PERP",
+  "market_index": 0,
+
+  "poll_delay_ms": 1000,
+
+  "grid": {
+    "mode": "long",
+    "levels": 20,
+    "start_price": "80000",
+    "end_price": "90000",
+    "base_order_size": "0.001",
+    "max_investment_quote": "1000",
+    "leverage": "5",
+    "max_leverage": "50",
+    "post_only": false,
+    "is_spot": false,
+    "stop_loss": null,
+    "take_profit": null
+  },
+
+  "instrument_meta": {
+    "base_asset": "BTC",
+    "quote_asset": "USDC",
+    "sz_decimals": 5,
+    "px_decimals": 1,
+    "tick_size": "1.0",
+    "lot_size": "0.00001",
+    "min_qty": "0.001",
+    "min_notional": "10"
+  },
+
+  "builder_fee": null,
+
+  "sync": {
+    "_comment": "Optional trade syncing to upstream API for PnL tracking",
+    "bot_id": "my-bot-id-uuid",
+    "upstream_url": "https://your-algobot-api.com/bot-api",
+    "sync_interval_ms": 10000,
+    "timeout_secs": 10,
+    "enabled": true
+  },
+
+  "_examples": {
+    "long_grid": {
+      "_description": "LONG grid: Buy at each level, sell to take profit above. Good for bullish/ranging markets.",
+      "mode": "long",
+      "levels": 20,
+      "start_price": "80000",
+      "end_price": "90000",
+      "_note": "start_price < end_price for LONG mode"
+    },
+    "short_grid": {
+      "_description": "SHORT grid: Sell at each level, buy to take profit below. Good for bearish markets.",
+      "mode": "short",
+      "levels": 20,
+      "start_price": "90000",
+      "end_price": "80000",
+      "_note": "start_price > end_price for SHORT mode"
+    },
+    "neutral_grid": {
+      "_description": "NEUTRAL grid: Buy below mid price, sell above. Good for ranging markets without direction.",
+      "mode": "neutral",
+      "levels": 20,
+      "start_price": "80000",
+      "end_price": "90000",
+      "_note": "Grid builds around current price with both long and short sides"
+    }
+  },
+
+  "_investment_calculation": {
+    "_formula": "total_notional = max_investment_quote × leverage",
+    "_example": "1000 USDC × 5x leverage = 5000 USDC notional budget",
+    "_per_level": "5000 / (20-1) = ~263 USDC per level",
+    "_quantity_per_level": "263 / price at level"
+  },
+
+  "_liquidation_safety": {
+    "_description": "The grid validates that liquidation prices are outside the trading range",
+    "_long_check": "Liquidation price of long at end_price must be < start_price",
+    "_short_check": "Liquidation price of short at start_price must be > end_price",
+    "_recommendation": "Use lower leverage or wider grid range if validation fails"
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+

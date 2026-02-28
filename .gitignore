@@ -1,0 +1,58 @@
+# Rust
+/target/
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.*
+
+# ─── CONFIDENTIAL: Config files with private keys ────────────────────────────
+# Only *.example.json files should be committed (with placeholder keys)
+config.json
+config-*.json
+!config-*.example.json
+test_config.json
+s.json
+market-index.json
+
+# ─── CONFIDENTIAL: Internal deployment & infra ───────────────────────────────
+deploy.sh
+compile.sh
+DEPLOY.md
+testing.md
+k8s/
+scripts/
+
+# ─── CONFIDENTIAL: AI context / internal docs ───────────────────────────────
+Contexts/
+index.md
+COMMANDS.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Debug/test files
+debug_sign.py
+test_hl_order.py

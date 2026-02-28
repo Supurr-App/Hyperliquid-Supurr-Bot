@@ -1,0 +1,31 @@
+[env]
+# Default log level for development (can be overridden with RUST_LOG env var)
+RUST_LOG = { value = "debug,hyper=info,reqwest=info,rustls=warn", force = false }
+
+[alias]
+# Run the bot binary (market-maker) in release mode
+bot = "run --release --bin bot"
+
+# Run the bot binary in dev mode (faster compile, slower runtime)
+bot-dev = "run --bin bot"
+
+# Market maker shortcuts (config-file driven)
+mm = "run --release --bin bot -- --config config.json"
+mm-dry = "run --release --bin bot -- --config config.json --dry-run"
+
+# Example configs shipped in repo
+mm-example = "run --release --bin bot -- --config config.example.json"
+mm-example-dry = "run --release --bin bot -- --config config.example.json --dry-run"
+
+# HIP-3 convenience configs
+mm-hip3-usdc = "run --release --bin bot -- --config config-hip3-usdc.json"
+mm-hip3-usdc-dry = "run --release --bin bot -- --config config-hip3-usdc.json --dry-run"
+mm-hip3-usdh = "run --release --bin bot -- --config config-hip3-usdh.json"
+mm-hip3-usdh-dry = "run --release --bin bot -- --config config-hip3-usdh.json --dry-run"
+
+# Grid bot shortcuts
+grid = "run --release --bin bot -- --config config-grid.json"
+grid-dry = "run --release --bin bot -- --config config-grid.json --dry-run"
+
+
+grid-spot = "run --release --bin bot -- --config config-spot.json"

@@ -1,0 +1,80 @@
+{
+  "environment": "testnet",
+  "private_key": "YOUR_PRIVATE_KEY_HEX",
+  "address": "YOUR_WALLET_ADDRESS",
+  "vault_address": null,
+
+  "instrument": "BTC-PERP",
+  "market_index": 0,
+
+  "poll_delay_ms": 500,
+
+  "base_order_size": "0.001",
+  "base_spread": "0.001",
+  "max_position_size": "0.1",
+
+  "skew_mode": "both",
+  "price_skew_gamma": "0.05",
+  "size_skew_floor": "0.2",
+  "min_price_change_pct": "0.0005",
+
+  "stop_loss": null,
+  "take_profit": null,
+
+  "builder_fee": {
+    "address": "0x36be02a397e969e010ccbd7333f4169f66b8989f",
+    "fee_tenths_bp": 30
+  },
+
+  "instrument_meta": {
+    "base_asset": "BTC",
+    "quote_asset": "USDC",
+    "tick_size": "0.1",
+    "lot_size": "0.0001",
+    "min_qty": "0.0001",
+    "min_notional": "10"
+  },
+
+  "_comment": "--- HIP-3 Configuration (Builder-Deployed Perp DEX) ---",
+  "_comment2": "Uncomment 'hip3' to trade on a HIP-3 DEX instead of main Hyperliquid",
+
+  "_example_hip3_usdc": {
+    "_comment": "Example: HIP-3 DEX with USDC collateral",
+    "hip3": {
+      "dex_name": "xyz",
+      "dex_index": 1,
+      "quote_currency": "USDC",
+      "asset_index": 5
+    },
+    "instrument": "xyz:AAPL-PERP",
+    "market_index": 5,
+    "instrument_meta": {
+      "base_asset": "xyz:AAPL",
+      "quote_asset": "USDC",
+      "tick_size": "0.01",
+      "lot_size": "0.1",
+      "min_qty": "0.1",
+      "min_notional": "10"
+    }
+  },
+
+  "_example_hip3_usdh": {
+    "_comment": "Example: HIP-3 DEX with USDH collateral",
+    "hip3": {
+      "dex_name": "flx",
+      "dex_index": 2,
+      "quote_currency": "USDH",
+      "asset_index": 0
+    },
+    "instrument": "flx:GOLD-PERP",
+    "market_index": 0,
+    "instrument_meta": {
+      "base_asset": "flx:GOLD",
+      "quote_asset": "USDH",
+      "tick_size": "0.1",
+      "lot_size": "0.01",
+      "min_qty": "0.01",
+      "min_notional": "10"
+    }
+  }
+}

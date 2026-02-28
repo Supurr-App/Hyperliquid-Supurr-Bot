@@ -1,0 +1,7 @@
+[build]
+# Use Docker for cross-compilation
+default-target = "x86_64-unknown-linux-gnu"
+
+[target.x86_64-unknown-linux-gnu]
+# Use ghcr.io/cross-rs images
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:main"

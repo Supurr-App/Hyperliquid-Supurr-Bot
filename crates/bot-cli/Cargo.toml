@@ -1,0 +1,42 @@
+[package]
+name = "bot-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "CLI runner for the trading bot"
+
+[[bin]]
+name = "bot"
+path = "src/main.rs"
+
+[[bin]]
+name = "schema"
+path = "src/bin/schema.rs"
+
+[lib]
+name = "bot_cli"
+path = "src/lib.rs"
+
+
+[dependencies]
+bot-core = { workspace = true }
+bot-engine = { workspace = true }
+exchange-hyperliquid = { workspace = true }
+strategy-market-maker = { workspace = true }
+strategy-grid = { workspace = true }
+strategy-arbitrage = { workspace = true }
+strategy-dca = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dotenvy = { workspace = true }
+anyhow = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+reqwest = { workspace = true }
+

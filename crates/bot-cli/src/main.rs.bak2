@@ -1,0 +1,1027 @@
+//! Bot CLI - entry point for running the trading bot.
+//!
+//! ## Configuration
+//!
+//! The bot can be configured via:
+//! 1. Environment variables (loaded from `.env` file if present)
+//! 2. A JSON config file (pass `--config path/to/config.json`)
+//!
+//! ### Required Environment Variables
+//!
+//! ```
+//! HYPERLIQUID_PK=<your-private-key-hex-without-0x>
+//! HYPERLIQUID_ADDRESS=<your-wallet-address>
+//! ```
+//!
+//! ### Optional Environment Variables
+//!
+//! ```
+//! ENVIRONMENT=testnet|mainnet          # default: testnet
+//! INSTRUMENT=BTC-PERP                  # default: BTC-PERP
+//! MARKET_INDEX=0                       # default: 0
+//! BASE_ORDER_SIZE=0.001                # default: 0.001
+//! BASE_SPREAD=0.001                    # default: 0.001 (0.1%)
+//! MAX_POSITION_SIZE=0.1                # default: 0.1
+//! SKEW_MODE=both|size|price|none       # default: both
+//! PRICE_SKEW_GAMMA=0.05                # default: 0.05
+//! SIZE_SKEW_FLOOR=0.2                  # default: 0.2
+//! MIN_PRICE_CHANGE_PCT=0.0005          # default: 0.0005
+//! STOP_LOSS=-100                       # optional
+//! TAKE_PROFIT=100                      # optional
+//! RUST_LOG=bot=debug                   # logging level
+//! ```
+
+use anyhow::{Context, Result};
+use bot_core::{
+    AssetId, Environment, ExchangeId, ExchangeInstance, InstrumentId, InstrumentKind,
+    InstrumentMeta, Market, MarketIndex, Price, Qty, Quote, StrategyId,
+};
+use bot_engine::testing::{create_standalone_paper_exchange_with_id, ArcExchange, PaperExchange};
+use bot_engine::{
+    build_instrument_meta, build_strategy, BotConfig, Engine, EngineConfig, TradeSyncerConfig,
+};
+use exchange_hyperliquid::{
+    new_client_with_registration, BuilderFee, Hip3Config, HyperliquidConfig,
+};
+use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Arc;
+use tracing_subscriber::EnvFilter;
+
+impl BotConfig {
+    /// Load config from environment variables.
+    /// V2 configs require a JSON file, so this returns an error.
+    pub fn from_env() -> Result<Self> {
+        anyhow::bail!("V2 config format requires a JSON file. Use --config <file>")
+    }
+
+    /// Load config from a JSON file
+    pub fn from_file(path: &PathBuf) -> Result<Self> {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file: {:?}", path))?;
+        let config: Self = serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse config file: {:?}", path))?;
+
+        // Validate markets array is not empty
+        if config.markets.is_empty() {
+            anyhow::bail!("Config must have at least one market in the 'markets' array");
+        }
+
+        Ok(config)
+    }
+
+    /// Parse environment from string
+    fn parse_environment(&self) -> Environment {
+        match self.environment.to_lowercase().as_str() {
+            "mainnet" | "main" | "prod" => Environment::Mainnet,
+            _ => Environment::Testnet,
+        }
+    }
+}
+
+/// Trading mode: live, paper, or backtest
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TradingMode {
+    Live,
+    Paper,
+    Backtest { prices_path: PathBuf },
+}
+
+impl Default for TradingMode {
+    fn default() -> Self {
+        Self::Live
+    }
+}
+
+fn parse_args() -> (Option<PathBuf>, bool, TradingMode) {
+    let args: Vec<String> = std::env::args().collect();
+    let mut config_path = None;
+    let mut dry_run = false;
+    let mut mode = TradingMode::Live;
+    let mut prices_path: Option<PathBuf> = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--config" | "-c" => {
+                if i + 1 < args.len() {
+                    config_path = Some(PathBuf::from(&args[i + 1]));
+                    i += 1;
+                }
+            }
+            "--dry-run" | "-d" => {
+                dry_run = true;
+            }
+            "--prices" | "-p" => {
+                if i + 1 < args.len() {
+                    prices_path = Some(PathBuf::from(&args[i + 1]));
+                    i += 1;
+                }
+            }
+            "--mode" | "-m" => {
+                if i + 1 < args.len() {
+                    match args[i + 1].to_lowercase().as_str() {
+                        "paper" => mode = TradingMode::Paper,
+                        "live" => mode = TradingMode::Live,
+                        other => {
+                            eprintln!("Warning: Unknown mode '{}', defaulting to 'live'", other);
+                        }
+                    }
+                    i += 1;
+                }
+            }
+            "--help" | "-h" => {
+                print_help();
+                std::process::exit(0);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    // If --prices was provided, override mode to Backtest
+    if let Some(path) = prices_path {
+        mode = TradingMode::Backtest { prices_path: path };
+    }
+
+    (config_path, dry_run, mode)
+}
+
+fn print_help() {
+    println!(
+        r#"
+Trading Bot - Hyperliquid Market Maker & Grid Bot
+
+USAGE:
+    bot [OPTIONS]
+
+OPTIONS:
+    -c, --config <FILE>    Path to JSON config file
+    -d, --dry-run          Print config and exit without trading
+    -m, --mode <MODE>      Trading mode: 'live' (default) or 'paper'
+    -h, --help             Print help information
+
+
+STRATEGIES:
+    Market Maker (default):  Set "strategy_type": "mm" in config
+    Grid Bot:                Set "strategy_type": "grid" in config
+
+CARGO ALIASES:
+    cargo mm               Run market maker with config.json
+    cargo mm-dry           Dry run market maker
+    cargo grid             Run grid bot with config-grid.json
+    cargo grid-dry         Dry run grid bot
+
+EXAMPLE:
+    # Market maker
+    cargo mm
+    
+    # Grid bot
+    cargo grid
+    
+    # Using custom config file
+    cargo run --bin bot -- --config my-config.json
+
+    # Dry run (validate config without trading)
+    cargo grid-dry
+"#
+    );
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Load .env file if present
+    dotenvy::dotenv().ok();
+
+    // Parse CLI arguments
+    let (config_path, dry_run, trading_mode) = parse_args();
+
+    // Initialize tracing (suppress noisy logs, use quieter level for backtest)
+    let is_backtest = matches!(trading_mode, TradingMode::Backtest { .. });
+    let log_level = if is_backtest { "warn" } else { "debug" };
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::from_default_env()
+                .add_directive(format!("bot={}", log_level).parse().unwrap())
+                .add_directive(format!("bot_engine={}", log_level).parse().unwrap())
+                .add_directive("hyper_util=warn".parse().unwrap())
+                .add_directive("hyper=warn".parse().unwrap())
+                .add_directive("reqwest=warn".parse().unwrap()),
+        )
+        .init();
+
+    // Load configuration
+    let config = if let Some(path) = config_path {
+        tracing::info!("Loading config from: {:?}", path);
+        BotConfig::from_file(&path)?
+    } else {
+        tracing::info!("Loading config from environment variables");
+        BotConfig::from_env()?
+    };
+
+    let environment = config.parse_environment();
+    let strategy_type = config.strategy_type.to_lowercase();
+
+    tracing::info!(
+        "Environment: {} | Strategy: {} | Market: {} | Mode: {:?}",
+        config.environment,
+        strategy_type,
+        config.instrument_id(),
+        trading_mode
+    );
+
+    // Determine which strategy to use
+    let is_grid = strategy_type == "grid";
+    let is_arb = strategy_type == "arbitrage" || strategy_type == "arb";
+    let is_dca = strategy_type == "dca";
+
+    // Build and validate strategy config based on type
+    let strategy_box: Box<dyn bot_core::Strategy> = if is_arb {
+        // Arbitrage strategy
+        let arb_json = config
+            .arbitrage
+            .as_ref()
+            .context("Arbitrage config missing: add 'arbitrage' section to config")?;
+
+        let arb_config = ArbitrageConfig {
+            strategy_id: StrategyId::new(format!(
+                "{}-arb",
+                arb_json.spot_instrument.to_lowercase()
+            )),
+            spot_exchange: ExchangeInstance::new(ExchangeId::new("hyperliquid"), environment),
+            perp_exchange: ExchangeInstance::new(ExchangeId::new("hyperliquid"), environment),
+            spot_instrument: InstrumentId::new(&arb_json.spot_instrument),
+            spot_market_index: MarketIndex::new(arb_json.spot_market_index),
+            perp_instrument: InstrumentId::new(&arb_json.perp_instrument),
+            perp_market_index: MarketIndex::new(arb_json.perp_market_index),
+            order_amount: Decimal::from_str(&arb_json.order_amount)
+                .context("Invalid order_amount")?,
+            perp_leverage: Decimal::from_str(&arb_json.perp_leverage)
+                .context("Invalid perp_leverage")?,
+            min_opening_spread_pct: Decimal::from_str(&arb_json.min_opening_spread_pct)
+                .context("Invalid min_opening_spread_pct")?,
+            min_closing_spread_pct: Decimal::from_str(&arb_json.min_closing_spread_pct)
+                .context("Invalid min_closing_spread_pct")?,
+            spot_slippage_buffer_pct: Decimal::from_str(&arb_json.spot_slippage_buffer_pct)
+                .context("Invalid spot_slippage_buffer_pct")?,
+            perp_slippage_buffer_pct: Decimal::from_str(&arb_json.perp_slippage_buffer_pct)
+                .context("Invalid perp_slippage_buffer_pct")?,
+        };
+
+        // Validate arb config
+        let errors = arb_config.validate();
+        if !errors.is_empty() {
+            for err in &errors {
+                tracing::error!("Arb config validation error: {}", err);
+            }
+            anyhow::bail!("Arbitrage configuration validation failed");
+        }
+
+        tracing::info!("Arbitrage strategy config validated successfully");
+        tracing::info!(
+            "  spot: {} | perp: {} | amount: {}",
+            arb_config.spot_instrument,
+            arb_config.perp_instrument,
+            arb_config.order_amount
+        );
+        tracing::info!(
+            "  open_spread: {} | close_spread: {}",
+            arb_config.min_opening_spread_pct,
+            arb_config.min_closing_spread_pct
+        );
+
+        if dry_run {
+            tracing::info!("Dry run mode - exiting without trading");
+            println!("\n✓ Arbitrage configuration is valid. Remove --dry-run to start trading.");
+            return Ok(());
+        }
+
+        Box::new(ArbitrageStrategy::new(arb_config))
+    } else if is_grid {
+        // Grid strategy
+        let grid_json = config
+            .grid
+            .as_ref()
+            .context("Grid config missing: add 'grid' section to config")?;
+
+        let grid_config = GridConfig {
+            strategy_id: StrategyId::new(format!("{}-grid", config.primary_market().base())),
+            environment,
+            market: config.primary_market().clone(),
+            grid_mode: match grid_json.mode.to_lowercase().as_str() {
+                "short" => GridMode::Short,
+                "neutral" => GridMode::Neutral,
+                _ => GridMode::Long,
+            },
+            grid_levels: grid_json.levels,
+            start_price: Decimal::from_str(&grid_json.start_price)
+                .context("Invalid start_price")?,
+            end_price: Decimal::from_str(&grid_json.end_price).context("Invalid end_price")?,
+            max_investment_quote: Decimal::from_str(&grid_json.max_investment_quote)
+                .context("Invalid max_investment_quote")?,
+            base_order_size: Decimal::new(1, 3), // fallback 0.001
+            leverage: Decimal::from_str(&grid_json.leverage).context("Invalid leverage")?,
+            max_leverage: Decimal::from_str(&grid_json.max_leverage)
+                .context("Invalid max_leverage")?,
+            post_only: grid_json.post_only,
+            stop_loss: grid_json
+                .stop_loss
+                .as_ref()
+                .map(|s| Decimal::from_str(s))
+                .transpose()
+                .context("Invalid grid stop_loss")?,
+            take_profit: grid_json
+                .take_profit
+                .as_ref()
+                .map(|s| Decimal::from_str(s))
+                .transpose()
+                .context("Invalid grid take_profit")?,
+        };
+
+        // Validate grid config
+        let errors = grid_config.validate();
+        if !errors.is_empty() {
+            for err in &errors {
+                tracing::error!("Grid config validation error: {}", err);
+            }
+            anyhow::bail!("Grid configuration validation failed");
+        }
+
+        tracing::info!("Grid strategy config validated successfully");
+        tracing::info!(
+            "  mode: {:?} | levels: {} | range: [{}, {}]",
+            grid_config.grid_mode,
+            grid_config.grid_levels,
+            grid_config.start_price,
+            grid_config.end_price
+        );
+        tracing::info!(
+            "  investment: {} USDC | leverage: {}x",
+            grid_config.max_investment_quote,
+            grid_config.leverage
+        );
+
+        if dry_run {
+            let quote_per_level = grid_config.quote_per_level();
+            tracing::info!("  quote per level: {} USDC", quote_per_level);
+            tracing::info!("Dry run mode - exiting without trading");
+            println!("\n✓ Grid configuration is valid. Remove --dry-run to start trading.");
+            return Ok(());
+        }
+
+        Box::new(GridStrategy::new(grid_config))
+    } else if is_dca {
+        // DCA strategy
+        let dca_json = config
+            .dca
+            .as_ref()
+            .context("DCA config missing: add 'dca' section to config")?;
+
+        let dca_config = DCAConfig {
+            strategy_id: StrategyId::new(format!("{}-dca", config.primary_market().base())),
+            environment,
+            market: config.primary_market().clone(),
+            direction: match dca_json.direction.to_lowercase().as_str() {
+                "short" => DCADirection::Short,
+                _ => DCADirection::Long,
+            },
+            trigger_price: Decimal::from_str(&dca_json.trigger_price)
+                .context("Invalid trigger_price")?,
+            base_order_size: Decimal::from_str(&dca_json.base_order_size)
+                .context("Invalid base_order_size")?,
+            dca_order_size: Decimal::from_str(&dca_json.dca_order_size)
+                .context("Invalid dca_order_size")?,
+            max_dca_orders: dca_json.max_dca_orders,
+            size_multiplier: Decimal::from_str(&dca_json.size_multiplier)
+                .context("Invalid size_multiplier")?,
+            price_deviation_pct: Decimal::from_str(&dca_json.price_deviation_pct)
+                .context("Invalid price_deviation_pct")?,
+            deviation_multiplier: Decimal::from_str(&dca_json.deviation_multiplier)
+                .context("Invalid deviation_multiplier")?,
+            take_profit_pct: Decimal::from_str(&dca_json.take_profit_pct)
+                .context("Invalid take_profit_pct")?,
+            stop_loss: dca_json
+                .stop_loss
+                .as_ref()
+                .map(|s| Decimal::from_str(s))
+                .transpose()
+                .context("Invalid stop_loss")?,
+            leverage: Decimal::from_str(&dca_json.leverage).context("Invalid leverage")?,
+            max_leverage: Decimal::from_str(&dca_json.max_leverage)
+                .context("Invalid max_leverage")?,
+            restart_on_complete: dca_json.restart_on_complete,
+            cooldown_period_secs: dca_json.cooldown_period_secs,
+        };
+
+        // Validate DCA config
+        let errors = dca_config.validate();
+        if !errors.is_empty() {
+            for err in &errors {
+                tracing::error!("DCA config validation error: {}", err);
+            }
+            anyhow::bail!("DCA configuration validation failed");
+        }
+
+        tracing::info!("DCA strategy config validated successfully");
+        tracing::info!(
+            "  direction: {:?} | trigger: {} | base: {} | dca: {}",
+            dca_config.direction,
+            dca_config.trigger_price,
+            dca_config.base_order_size,
+            dca_config.dca_order_size
+        );
+        tracing::info!(
+            "  max_orders: {} | deviation: {}% | tp: {}%",
+            dca_config.max_dca_orders,
+            dca_config.price_deviation_pct,
+            dca_config.take_profit_pct
+        );
+        tracing::info!(
+            "  max_investment: {} (approx)",
+            dca_config.max_total_investment()
+        );
+        if dca_config.restart_on_complete {
+            tracing::info!(
+                "  restart: enabled | cooldown: {}s between cycles",
+                dca_config.cooldown_period_secs
+            );
+        }
+
+        if dry_run {
+            tracing::info!("Dry run mode - exiting without trading");
+            println!("\n✓ DCA configuration is valid. Remove --dry-run to start trading.");
+            return Ok(());
+        }
+
+        Box::new(DCAStrategy::new(dca_config))
+    } else {
+        // Market maker strategy (default)
+        let mm_json = config
+            .mm
+            .as_ref()
+            .context("MM config missing: add 'mm' section to config for strategy_type='mm'")?;
+
+        let base_order_size =
+            Decimal::from_str(&mm_json.base_order_size).context("Invalid base_order_size")?;
+        let base_spread = Decimal::from_str(&mm_json.base_spread).context("Invalid base_spread")?;
+        let max_position_size =
+            Decimal::from_str(&mm_json.max_position_size).context("Invalid max_position_size")?;
+        let price_skew_gamma =
+            Decimal::from_str(&mm_json.price_skew_gamma).context("Invalid price_skew_gamma")?;
+        let size_skew_floor =
+            Decimal::from_str(&mm_json.size_skew_floor).context("Invalid size_skew_floor")?;
+        let min_price_change_pct = Decimal::from_str(&mm_json.min_price_change_pct)
+            .context("Invalid min_price_change_pct")?;
+
+        let stop_loss = mm_json
+            .stop_loss
+            .as_ref()
+            .map(|s| Decimal::from_str(s))
+            .transpose()
+            .context("Invalid stop_loss")?;
+        let take_profit = mm_json
+            .take_profit
+            .as_ref()
+            .map(|s| Decimal::from_str(s))
+            .transpose()
+            .context("Invalid take_profit")?;
+
+        let skew_mode = match mm_json.skew_mode.to_lowercase().as_str() {
+            "none" => SkewMode::None,
+            "size" => SkewMode::Size,
+            "price" => SkewMode::Price,
+            "both" | _ => SkewMode::Both,
+        };
+
+        let mm_config = MarketMakerConfig {
+            strategy_id: StrategyId::new(format!("{}-mm", config.primary_market().base())),
+            environment,
+            market: config.primary_market().clone(),
+            base_order_size,
+            base_spread,
+            target_position_pct: Decimal::new(5, 1), // 0.5
+            min_position_pct: Decimal::new(1, 1),    // 0.1
+            max_position_pct: Decimal::new(9, 1),    // 0.9
+            max_position_size,
+            skew_mode,
+            price_skew_gamma,
+            size_skew_floor,
+            min_price_change_pct,
+            stop_loss,
+            take_profit,
+        };
+
+        // Validate MM config
+        let errors = mm_config.validate();
+        if !errors.is_empty() {
+            for err in &errors {
+                tracing::error!("Config validation error: {}", err);
+            }
+            anyhow::bail!("Configuration validation failed");
+        }
+
+        tracing::info!("Market maker config validated successfully");
+        tracing::info!(
+            "  base_order_size: {} | base_spread: {} | max_position: {}",
+            base_order_size,
+            base_spread,
+            max_position_size
+        );
+        tracing::info!(
+            "  skew_mode: {:?} | gamma: {} | floor: {}",
+            mm_config.skew_mode,
+            price_skew_gamma,
+            size_skew_floor
+        );
+
+        if dry_run {
+            tracing::info!("Dry run mode - exiting without trading");
+            println!("\n✓ Configuration is valid. Remove --dry-run to start trading.");
+            return Ok(());
+        }
+
+        Box::new(MarketMaker::new(mm_config))
+    };
+
+    // Configure Hyperliquid client
+    let builder_fee = config.builder_fee.as_ref().map(|bf| BuilderFee {
+        address: bf.address.clone(),
+        fee_tenths_bp: bf.fee_tenths_bp,
+    });
+
+    if let Some(ref bf) = builder_fee {
+        tracing::info!(
+            "Builder fee configured: address={}, fee={} tenths-of-bp ({:.4}%)",
+            bf.address,
+            bf.fee_tenths_bp,
+            bf.fee_tenths_bp as f64 / 1000.0
+        );
+    }
+
+    // Build HIP-3 config from Market if it's a HIP-3 market
+    let hip3 = config.hip3_config().map(|h| {
+        tracing::info!(
+            "HIP-3 configured: dex={}, index={}, quote={}, asset_index={}",
+            h.dex_name,
+            h.dex_index,
+            h.quote_currency,
+            h.asset_index
+        );
+        Hip3Config {
+            dex_name: h.dex_name.clone(),
+            dex_index: h.dex_index,
+            quote_currency: h.quote_currency.clone(),
+            asset_index: h.asset_index,
+        }
+    });
+
+    // Determine spot_coin for alias resolution (from primary market)
+    let spot_coin = config.primary_market().spot_coin();
+
+    if let Some(ref coin) = spot_coin {
+        tracing::info!("Spot coin configured: {} (for alias resolution)", coin);
+    }
+
+    let hl_config = HyperliquidConfig {
+        environment,
+        private_key: config.private_key.clone(),
+        main_address: Some(config.address.clone()),
+        vault_address: config.vault_address.clone(),
+        timeout_secs: 10,
+        proxy_url: None,
+        base_url_override: None,
+        builder_fee,
+        hip3,
+        is_spot: config.is_spot(),
+        spot_coin,
+        spot_market_index: config.primary_market().spot_market_index(),
+    };
+
+    // Create exchange client with registration handle
+    let (real_exchange, hl_client) = new_client_with_registration(hl_config)?;
+
+    // Determine exchange based on trading mode
+    // - Live: use real exchange directly
+    // - Paper: wrap real exchange in PaperExchange for simulated fills (uses real quotes)
+    // - Backtest: use standalone PaperExchange with pre-loaded historical prices
+    let (exchange, backtest_paper): (Arc<dyn bot_core::Exchange>, Option<Arc<PaperExchange<_>>>) =
+        match &trading_mode {
+            TradingMode::Paper => {
+                tracing::info!("📄 PAPER TRADING MODE - orders will be simulated locally");
+                let mut initial_balances = std::collections::HashMap::new();
+                initial_balances.insert(AssetId::new("USDC"), Decimal::new(10_000, 0));
+                initial_balances.insert(AssetId::new("USDH"), Decimal::new(10_000, 0));
+                let wrapped_exchange = ArcExchange::new(real_exchange);
+                (
+                    Arc::new(PaperExchange::new(wrapped_exchange, initial_balances)),
+                    None,
+                )
+            }
+            TradingMode::Backtest { prices_path } => {
+                tracing::info!(
+                    "📊 BACKTEST MODE - running with historical prices from {:?}",
+                    prices_path
+                );
+
+                // Load prices from JSON file
+                let prices_str = std::fs::read_to_string(prices_path)
+                    .with_context(|| format!("Failed to read prices file: {:?}", prices_path))?;
+
+                #[derive(serde::Deserialize)]
+                struct PricePoint {
+                    ts: i64,
+                    price: String,
+                }
+                #[derive(serde::Deserialize)]
+                struct PricesFile {
+                    prices: Vec<PricePoint>,
+                }
+
+                let prices_file: PricesFile =
+                    serde_json::from_str(&prices_str).context("Failed to parse prices JSON")?;
+
+                tracing::info!("Loaded {} historical prices", prices_file.prices.len());
+
+                // Create standalone paper exchange with "hyperliquid" ID for strategy compatibility
+                let mut initial_balances = std::collections::HashMap::new();
+                initial_balances.insert(AssetId::new("USDC"), Decimal::new(100_000, 0)); // 100k for backtest
+                let paper = Arc::new(create_standalone_paper_exchange_with_id(
+                    initial_balances,
+                    "hyperliquid",
+                    config.parse_environment(),
+                ));
+
+                // Set 0.02% fee rate for realistic backtest simulation
+                paper.set_fee_rate(dec!(0.0002)).await;
+
+                // Convert prices to quotes and queue them
+                let instrument = config.instrument_id();
+                let spread = dec!(1.0); // $1 spread for simulation
+                let quotes: Vec<Quote> = prices_file
+                    .prices
+                    .iter()
+                    .filter_map(|p| {
+                        let price = Decimal::from_str(&p.price).ok()?;
+                        let half_spread = spread / dec!(2);
+                        Some(Quote {
+                            instrument: instrument.clone(),
+                            bid: Price::new(price - half_spread),
+                            ask: Price::new(price + half_spread),
+                            bid_size: Qty::new(dec!(1000)),
+                            ask_size: Qty::new(dec!(1000)),
+                            ts: p.ts,
+                        })
+                    })
+                    .collect();
+
+                tracing::info!("Queued {} quotes for backtest", quotes.len());
+                paper.queue_quotes(quotes).await;
+
+                (paper.clone() as Arc<dyn bot_core::Exchange>, Some(paper))
+            }
+            TradingMode::Live => (real_exchange, None),
+        };
+
+    // Note: register_user() is called later, after strategy is registered,
+    // so we can check sync_mechanism()
+
+    // Determine quote currency (USDC by default, or from HIP-3 config)
+    let quote_currency = config
+        .hip3_config()
+        .map(|h| h.quote_currency.clone())
+        .unwrap_or_else(|| "USDC".to_string());
+
+    // Determine instrument kind based on config
+    let instrument_kind = if config.is_spot() {
+        InstrumentKind::Spot
+    } else {
+        InstrumentKind::Perp
+    };
+
+    // Register instrument metadata (derived from primary market)
+    let primary_market = config.primary_market();
+
+    // Extract instrument_meta from Market, use defaults if not provided
+    let (tick_size, lot_size, min_qty, min_notional) = primary_market
+        .instrument_meta()
+        .map(|im| (im.tick_size, im.lot_size, im.min_qty, im.min_notional))
+        .unwrap_or((Decimal::new(1, 1), Decimal::new(1, 4), None, None));
+
+    let instrument_meta = InstrumentMeta {
+        instrument_id: config.instrument_id(),
+        market_index: config.market_index(),
+        base_asset: AssetId::new(primary_market.base()),
+        quote_asset: AssetId::new(primary_market.quote()),
+        tick_size,
+        lot_size,
+        min_qty,
+        min_notional,
+        fee_asset_default: Some(AssetId::new(&quote_currency)),
+        kind: instrument_kind,
+    };
+
+    // Create engine
+    let mut engine = Engine::new(EngineConfig::default());
+    engine.register_exchange(exchange.clone());
+
+    // For arb strategy, register BOTH spot and perp instruments
+    // For other strategies, register single instrument
+    let instruments: Vec<InstrumentId> = if is_arb {
+        let arb_json = config.arbitrage.as_ref().unwrap();
+
+        // Build spot instrument meta (use defaults)
+        let spot_meta = get_default_instrument_meta(
+            &arb_json.spot_instrument,
+            arb_json.spot_market_index,
+            "USDC",
+            InstrumentKind::Spot,
+        );
+
+        // Build perp instrument meta (use defaults)
+        let perp_meta = get_default_instrument_meta(
+            &arb_json.perp_instrument,
+            arb_json.perp_market_index,
+            "USDC",
+            InstrumentKind::Perp,
+        );
+
+        tracing::info!(
+            "Arb: Registering spot instrument {} (index {:?})",
+            spot_meta.instrument_id,
+            spot_meta.market_index
+        );
+        tracing::info!(
+            "Arb: Registering perp instrument {} (index {:?})",
+            perp_meta.instrument_id,
+            perp_meta.market_index
+        );
+
+        let spot_id = spot_meta.instrument_id.clone();
+        let perp_id = perp_meta.instrument_id.clone();
+        engine.register_instrument(spot_meta);
+        engine.register_instrument(perp_meta);
+
+        vec![spot_id, perp_id]
+    } else {
+        engine.register_instrument(instrument_meta.clone());
+        vec![instrument_meta.instrument_id.clone()]
+    };
+
+    // Register the strategy (already boxed above)
+    engine.register_strategy(strategy_box);
+
+    // TODO: Refactor to Exchange lifecycle hooks for multi-exchange support
+    // Instead of direct hl_client calls, add Exchange trait methods:
+    //   async fn on_start(&self, sync_mechanism: SyncMechanism) -> Result<()>
+    //   async fn on_stop(&self, sync_mechanism: SyncMechanism) -> Result<()>
+    // This would make registration exchange-agnostic and scalable.
+    // For now, this Hyperliquid-specific implementation works correctly.
+
+    // Register user for fills tracking ONLY if using Poll mechanism
+    // (Snapshot-based strategies like Arb don't need fill subscriptions)
+    if engine.sync_mechanism() == bot_core::SyncMechanism::Poll {
+        if let Err(e) = hl_client.register_user().await {
+            tracing::warn!(
+                "Failed to register for fills tracking (proxy may not be running): {}",
+                e
+            );
+        } else {
+            tracing::info!("Registered for fills tracking (Poll mechanism)");
+        }
+    } else {
+        tracing::info!("Skipping fills registration (using Snapshot mechanism)");
+    }
+
+    // Update leverage on Hyperliquid for perp markets
+    // Extract leverage from strategy config and set it on the exchange
+    // Skip for Paper/Backtest modes - only needed for live trading
+    if !config.is_spot() && matches!(trading_mode, TradingMode::Live) {
+        let strategy_leverage: Option<u32> = if let Some(ref g) = config.grid {
+            Decimal::from_str(&g.leverage).ok().and_then(|d| d.to_u32())
+        } else if let Some(ref d) = config.dca {
+            Decimal::from_str(&d.leverage).ok().and_then(|d| d.to_u32())
+        } else if let Some(ref a) = config.arbitrage {
+            Decimal::from_str(&a.perp_leverage)
+                .ok()
+                .and_then(|d| d.to_u32())
+        } else {
+            None
+        };
+
+        if let Some(leverage) = strategy_leverage {
+            let market_index = config.market_index();
+            tracing::info!(
+                "Setting leverage to {}x for market {:?}",
+                leverage,
+                market_index
+            );
+            if let Err(e) = hl_client
+                .update_leverage(&market_index, leverage, true)
+                .await
+            {
+                tracing::error!("Failed to set leverage: {}", e);
+                // Don't fail startup - leverage might already be set correctly
+            }
+        }
+    } else if !config.is_spot() {
+        tracing::info!("Skipping leverage update (Paper/Backtest mode)");
+    }
+
+    // Spawn the engine runner (instruments already set above for both arb and non-arb)
+    // For backtest mode, use 0ms poll delay for fast-forward execution
+    let poll_delay = if matches!(trading_mode, TradingMode::Backtest { .. }) {
+        tracing::info!("📊 BACKTEST MODE - using 0ms poll delay for fast-forward execution");
+        0
+    } else {
+        config.poll_delay_ms
+    };
+    let runner_config = bot_engine::RunnerConfig {
+        min_poll_delay_ms: poll_delay,
+        quote_poll_interval_ms: poll_delay,
+        ..Default::default()
+    };
+
+    tracing::info!("Poll delay: {}ms", poll_delay);
+
+    // Build syncer config if present and enabled
+    let syncer_config = config.sync.as_ref().and_then(|sync| {
+        if !sync.enabled {
+            tracing::info!("Trade syncing disabled in config");
+            return None;
+        }
+        tracing::info!(
+            "Trade syncing enabled: bot_id={}, upstream_url={}, interval={}ms",
+            sync.bot_id,
+            sync.upstream_url,
+            sync.sync_interval_ms
+        );
+        Some(TradeSyncerConfig {
+            bot_id: sync.bot_id.clone(),
+            upstream_url: sync.upstream_url.clone(),
+            sync_interval_ms: sync.sync_interval_ms,
+            timeout_secs: sync.timeout_secs,
+            max_retries: 3,
+            retry_delay_ms: 1000,
+            instrument: Some(config.instrument_id()),
+        })
+    });
+
+    // Cache sync mechanism before engine is moved to runner
+    let sync_mechanism = engine.sync_mechanism();
+
+    // Configure account syncer for Snapshot strategies (e.g., Arbitrage)
+    let account_syncer_config = if sync_mechanism == bot_core::SyncMechanism::Snapshot {
+        config.sync.as_ref().and_then(|sync| {
+            if !sync.enabled {
+                return None;
+            }
+            tracing::info!(
+                "Account syncing enabled for Snapshot strategy: bot_id={}, upstream_url={}",
+                sync.bot_id,
+                sync.upstream_url
+            );
+            Some(bot_engine::AccountSyncerConfig {
+                bot_id: sync.bot_id.clone(),
+                upstream_url: sync.upstream_url.clone(),
+                sync_interval_ms: 10_000,
+                timeout_secs: 10,
+                max_retries: 3,
+                retry_delay_ms: 1000,
+            })
+        })
+    } else {
+        None
+    };
+
+    let (runner_handle, shutdown_tx) = bot_engine::spawn_runner_with_syncer(
+        engine,
+        vec![exchange],
+        instruments,
+        runner_config,
+        syncer_config,
+        account_syncer_config,
+    );
+
+    // For backtest mode, spawn a monitor that triggers shutdown when prices are exhausted
+    if let Some(paper) = backtest_paper {
+        let backtest_shutdown_tx = shutdown_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                if !paper.has_queued_quotes().await {
+                    // Allow final processing
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    tracing::info!("📊 Backtest complete - all historical prices processed");
+                    let _ = backtest_shutdown_tx.unbounded_send(());
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+    }
+
+    tracing::info!("====================================");
+    tracing::info!(
+        "Bot started on {} - Press Ctrl+C to stop",
+        config.environment
+    );
+    tracing::info!("====================================");
+
+    // Wait for shutdown signal (SIGINT/Ctrl+C or SIGTERM) or runner completion
+    let mut runner_handle = runner_handle;
+
+    // Create shutdown future that handles both SIGINT and SIGTERM (Unix)
+    let shutdown_signal = async {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("Failed to create SIGTERM handler");
+            let mut sigint =
+                signal(SignalKind::interrupt()).expect("Failed to create SIGINT handler");
+            tokio::select! {
+                _ = sigterm.recv() => tracing::info!("SIGTERM received, initiating graceful shutdown..."),
+                _ = sigint.recv() => tracing::info!("SIGINT received, initiating graceful shutdown..."),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            tokio::signal::ctrl_c().await.ok();
+            tracing::info!("Ctrl+C received, initiating graceful shutdown...");
+        }
+    };
+
+    tokio::select! {
+        result = &mut runner_handle => {
+            // Runner exited on its own (strategy stopped)
+            match result {
+                Ok(_) => tracing::info!("Strategy stopped, exiting..."),
+                Err(e) => tracing::error!("Runner task error: {}", e),
+            }
+        }
+        _ = shutdown_signal => {
+            let _ = shutdown_tx.unbounded_send(());
+            tracing::info!("Waiting for cleanup to complete...");
+            match runner_handle.await {
+                Ok(_) => tracing::info!("Cleanup completed"),
+                Err(e) => tracing::error!("Runner task error during cleanup: {}", e),
+            }
+        }
+    }
+
+    // TODO: Refactor to exchange.on_stop(sync_mechanism) lifecycle hook
+    // See on_start() TODO above for full architecture design.
+
+    // Deregister from fills tracking (only if we registered)
+    if sync_mechanism == bot_core::SyncMechanism::Poll {
+        if let Err(e) = hl_client.deregister_user().await {
+            tracing::warn!("Failed to deregister from fills tracking: {}", e);
+        } else {
+            tracing::info!("Deregistered from fills tracking");
+        }
+    }
+
+    tracing::info!("Bot stopped.");
+    Ok(())
+}
+
+/// Get default instrument metadata for common pairs
+fn get_default_instrument_meta(
+    instrument: &str,
+    market_index: u32,
+    quote_currency: &str,
+    kind: InstrumentKind,
+) -> InstrumentMeta {
+    let (base, tick, lot) = match instrument {
+        "BTC-PERP" | "BTC" | "BTC-SPOT" => ("BTC", Decimal::new(1, 1), Decimal::new(1, 4)), // tick=0.1, lot=0.0001
+        "ETH-PERP" | "ETH" | "ETH-SPOT" => ("ETH", Decimal::new(1, 2), Decimal::new(1, 3)), // tick=0.01, lot=0.001
+        "SOL-PERP" | "SOL" | "SOL-SPOT" => ("SOL", Decimal::new(1, 3), Decimal::new(1, 2)), // tick=0.001, lot=0.01
+        "DOGE-PERP" | "DOGE" | "DOGE-SPOT" => ("DOGE", Decimal::new(1, 6), Decimal::new(1, 0)), // tick=0.000001, lot=1
+        _ => {
+            // For HIP-3 assets, spot, or unknown instruments, try to extract base from name
+            // e.g., "xyz:AAPL-PERP" -> base is the full "xyz:AAPL"
+            // e.g., "HYPE-SPOT" -> base is "HYPE"
+            let base_name = instrument
+                .rsplit_once('-')
+                .map(|(b, _)| b)
+                .unwrap_or(instrument);
+            (base_name, Decimal::new(1, 2), Decimal::new(1, 3))
+        }
+    };
+
+    InstrumentMeta {
+        instrument_id: InstrumentId::new(instrument),
+        market_index: MarketIndex::new(market_index),
+        base_asset: AssetId::new(base),
+        quote_asset: AssetId::new(quote_currency),
+        tick_size: tick,
+        lot_size: lot,
+        min_qty: Some(lot),
+        min_notional: Some(Decimal::new(10, 0)),
+        fee_asset_default: Some(AssetId::new(quote_currency)),
+        kind,
+    }
+}

@@ -1,0 +1,21 @@
+[package]
+name = "strategy-grid"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Grid trading strategy with LONG, SHORT, and NEUTRAL modes"
+
+[dependencies]
+bot-core = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+serde = { workspace = true }
+schemars = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+bot-engine = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

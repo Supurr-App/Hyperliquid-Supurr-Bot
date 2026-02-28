@@ -1,0 +1,97 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bot-cli",
+    "crates/bot-core",
+    "crates/bot-engine",
+    "crates/exchange-hyperliquid",
+    "crates/strategy-arbitrage",
+    "crates/strategy-dca",
+    "crates/strategy-grid",
+    "crates/strategy-market-maker",
+    "crates/strategy-tick-trader",
+]
+# Default to building CLI and helper binaries, skip WASM crates to prevent feature conflicts
+default-members = [
+    "crates/bot-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["Your Name <you@example.com>"]
+license = "MIT"
+
+[workspace.dependencies]
+# Internal crates
+bot-core = { path = "crates/bot-core" }
+bot-engine = { path = "crates/bot-engine" }
+exchange-hyperliquid = { path = "crates/exchange-hyperliquid" }
+strategy-market-maker = { path = "crates/strategy-market-maker" }
+strategy-tick-trader = { path = "crates/strategy-tick-trader" }
+strategy-grid = { path = "crates/strategy-grid" }
+strategy-dca = { path = "crates/strategy-dca" }
+strategy-arbitrage = { path = "crates/strategy-arbitrage" }
+
+# Async runtime
+tokio = { version = "1.40", features = ["rt-multi-thread", "sync", "time", "macros", "signal"] }
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+
+# Decimal math (critical for trading)
+rust_decimal = { version = "1.36", features = ["serde"] }
+rust_decimal_macros = "1.36"
+
+# JSON Schema generation (with rust_decimal support)
+schemars = { version = "0.8", features = ["rust_decimal"] }
+
+# Utilities
+uuid = { version = "1.10", features = ["v4", "serde"] }
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", default-features = false, features = ["serde", "std", "clock", "now"] }
+
+# Crypto (for Hyperliquid signing)
+eth-keystore = "0.5"
+ethers-core = "2.0"
+ethers-signers = "2.0"
+hex = "0.4"
+sha3 = "0.10"
+
+# Config
+dotenvy = "0.15"
+
+# Async traits
+async-trait = "0.1"
+
+# Cross-platform async primitives (works in WASM and native)
+futures = "0.3"
+async-lock = "3.0"
+
+# WASM-specific dependencies
+wasm-bindgen = "0.2.108"
+wasm-bindgen-futures = "0.4"
+gloo-timers = { version = "0.3", features = ["futures"] }
+js-sys = "0.3"
+wasm-bindgen-test = "0.3"
+
+# Testing
+proptest = "1.5"
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = "symbols"
+

@@ -1,0 +1,18 @@
+[package]
+name = "strategy-market-maker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Skew-based market maker strategy"
+
+[dependencies]
+bot-core = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+
+
+

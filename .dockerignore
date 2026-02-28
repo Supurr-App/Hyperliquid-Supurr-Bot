@@ -1,0 +1,17 @@
+target/
+.git/
+*.log
+k8s/
+Contexts/
+*.py
+
+
+
+
+
+
+
+
+
+
+

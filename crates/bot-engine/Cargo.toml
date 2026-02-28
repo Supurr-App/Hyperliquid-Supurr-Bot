@@ -1,0 +1,58 @@
+[package]
+name = "bot-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Trading bot engine: order manager, inventory, event routing"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[package.metadata.wasm-pack.profile.dev]
+wasm-opt = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["native"]
+native = ["tokio", "reqwest", "strategy-grid", "strategy-dca", "strategy-market-maker", "strategy-arbitrage", "strategy-tick-trader"]
+wasm = ["wasm-bindgen", "wasm-bindgen-futures", "gloo-timers", "js-sys", "console_error_panic_hook", "web-sys", "bot-core/wasm", "strategy-grid", "strategy-dca", "strategy-market-maker", "strategy-arbitrage"]
+
+[dependencies]
+bot-core = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+async-lock = { workspace = true }
+anyhow = { workspace = true }
+schemars = { workspace = true }
+
+# Strategy dependencies (optional, enabled by features)
+strategy-grid = { path = "../strategy-grid", optional = true }
+strategy-dca = { path = "../strategy-dca", optional = true }
+strategy-market-maker = { path = "../strategy-market-maker", optional = true }
+strategy-arbitrage = { path = "../strategy-arbitrage", optional = true }
+strategy-tick-trader = { path = "../strategy-tick-trader", optional = true }
+
+# Native-only dependencies (optional)
+tokio = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+
+# WASM-only dependencies (optional)
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+gloo-timers = { workspace = true, optional = true }
+js-sys = { workspace = true, optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
+web-sys = { version = "0.3", features = ["console"], optional = true }
+
+[dev-dependencies]
+wasm-bindgen-test = { workspace = true }

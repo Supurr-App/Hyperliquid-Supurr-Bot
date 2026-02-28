@@ -1,0 +1,28 @@
+[package]
+name = "bot-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Core types, events, commands, and traits for the trading bot"
+
+[dependencies]
+rust_decimal = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+schemars = { workspace = true }
+
+# These need feature flags for WASM compatibility
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# WASM-compatible alternatives (only used when wasm feature is enabled)
+getrandom = { version = "0.2", features = ["js"], optional = true }
+js-sys = { version = "0.3", optional = true }
+
+[features]
+default = []
+wasm = ["getrandom", "uuid/js", "chrono/wasmbind", "js-sys"]

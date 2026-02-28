@@ -1,0 +1,595 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BotConfig",
+  "description": "V2 Bot configuration - the full config format for all strategies.",
+  "type": "object",
+  "required": [
+    "address",
+    "environment",
+    "private_key",
+    "strategy_type"
+  ],
+  "properties": {
+    "address": {
+      "description": "Wallet address",
+      "type": "string"
+    },
+    "arbitrage": {
+      "description": "Arbitrage strategy configuration",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ArbitrageConfigJson"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "builder_fee": {
+      "description": "Builder fee configuration",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/BuilderFeeConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "dca": {
+      "description": "DCA strategy configuration",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/DCAConfigJson"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "environment": {
+      "description": "Environment: \"testnet\" or \"mainnet\"",
+      "type": "string"
+    },
+    "grid": {
+      "description": "Grid strategy configuration",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/GridConfigJson"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "hip3": {
+      "description": "HIP-3 configuration",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Hip3ConfigJson"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "markets": {
+      "description": "Markets to trade on (V2 format)",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/MarketConfig"
+      }
+    },
+    "mm": {
+      "description": "Market Maker strategy configuration",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MMConfigJson"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "poll_delay_ms": {
+      "description": "Polling delay in milliseconds",
+      "default": 500,
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "private_key": {
+      "description": "Private key (hex, with or without 0x prefix)",
+      "type": "string"
+    },
+    "strategy_type": {
+      "description": "Strategy type: \"grid\", \"mm\", \"dca\", or \"arbitrage\"",
+      "type": "string"
+    },
+    "sync": {
+      "description": "Trade sync configuration",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SyncConfigJson"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "vault_address": {
+      "description": "Optional vault address",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "definitions": {
+    "ArbitrageConfigJson": {
+      "description": "Arbitrage strategy configuration",
+      "type": "object",
+      "required": [
+        "min_closing_spread_pct",
+        "min_opening_spread_pct",
+        "order_amount",
+        "perp_instrument",
+        "perp_market_index",
+        "spot_instrument",
+        "spot_market_index"
+      ],
+      "properties": {
+        "min_closing_spread_pct": {
+          "description": "Minimum spread to close",
+          "type": "string"
+        },
+        "min_opening_spread_pct": {
+          "description": "Minimum spread to open",
+          "type": "string"
+        },
+        "order_amount": {
+          "description": "Order amount in base asset",
+          "type": "string"
+        },
+        "perp_instrument": {
+          "description": "Perp instrument to trade (e.g., \"HYPE\")",
+          "type": "string"
+        },
+        "perp_leverage": {
+          "description": "Leverage for perp position",
+          "default": "5",
+          "type": "string"
+        },
+        "perp_market_index": {
+          "description": "Perp market index",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "perp_slippage_buffer_pct": {
+          "description": "Slippage buffer for perp orders",
+          "default": "0.001",
+          "type": "string"
+        },
+        "spot_instrument": {
+          "description": "Spot instrument to trade (e.g., \"HYPE-SPOT\")",
+          "type": "string"
+        },
+        "spot_market_index": {
+          "description": "Spot market index",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "spot_slippage_buffer_pct": {
+          "description": "Slippage buffer for spot orders",
+          "default": "0.001",
+          "type": "string"
+        }
+      }
+    },
+    "BuilderFeeConfig": {
+      "description": "Builder fee configuration",
+      "type": "object",
+      "required": [
+        "address",
+        "fee_tenths_bp"
+      ],
+      "properties": {
+        "address": {
+          "description": "Builder address to receive the fee",
+          "type": "string"
+        },
+        "fee_tenths_bp": {
+          "description": "Fee in tenths of a basis point (e.g., 30 = 3 bp = 0.03%)",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "DCAConfigJson": {
+      "description": "DCA strategy configuration",
+      "type": "object",
+      "required": [
+        "base_order_size",
+        "dca_order_size",
+        "price_deviation_pct",
+        "take_profit_pct",
+        "trigger_price"
+      ],
+      "properties": {
+        "base_order_size": {
+          "description": "Base order size in base asset",
+          "type": "string"
+        },
+        "cooldown_period_secs": {
+          "description": "Cooldown period in seconds between cycles",
+          "default": 60,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "dca_order_size": {
+          "description": "DCA order size in base asset",
+          "type": "string"
+        },
+        "deviation_multiplier": {
+          "description": "Deviation multiplier for subsequent triggers",
+          "default": "1.0",
+          "type": "string"
+        },
+        "direction": {
+          "description": "Direction: \"long\" or \"short\"",
+          "default": "long",
+          "type": "string"
+        },
+        "leverage": {
+          "description": "Leverage",
+          "default": "5",
+          "type": "string"
+        },
+        "max_dca_orders": {
+          "description": "Maximum number of DCA orders",
+          "default": 5,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_leverage": {
+          "description": "Max leverage allowed",
+          "default": "50",
+          "type": "string"
+        },
+        "price_deviation_pct": {
+          "description": "Price deviation percentage to trigger first DCA",
+          "type": "string"
+        },
+        "restart_on_complete": {
+          "description": "Whether to restart cycle after take profit",
+          "default": false,
+          "type": "boolean"
+        },
+        "size_multiplier": {
+          "description": "Size multiplier for each subsequent DCA order",
+          "default": "1.5",
+          "type": "string"
+        },
+        "stop_loss": {
+          "description": "Optional stop loss",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "take_profit_pct": {
+          "description": "Take profit percentage from average entry",
+          "type": "string"
+        },
+        "trigger_price": {
+          "description": "Price to trigger base order",
+          "type": "string"
+        }
+      }
+    },
+    "GridConfigJson": {
+      "description": "Grid strategy configuration",
+      "type": "object",
+      "required": [
+        "end_price",
+        "max_investment_quote",
+        "start_price"
+      ],
+      "properties": {
+        "end_price": {
+          "description": "End price of the grid",
+          "type": "string"
+        },
+        "levels": {
+          "description": "Number of grid levels",
+          "default": 20,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "leverage": {
+          "description": "Leverage to use",
+          "default": "5",
+          "type": "string"
+        },
+        "max_investment_quote": {
+          "description": "Maximum investment in quote currency (USDC)",
+          "type": "string"
+        },
+        "max_leverage": {
+          "description": "Maximum leverage allowed (for liquidation calculation)",
+          "default": "50",
+          "type": "string"
+        },
+        "mode": {
+          "description": "Grid mode: \"long\", \"short\", \"neutral\"",
+          "default": "long",
+          "type": "string"
+        },
+        "post_only": {
+          "description": "Use post-only orders",
+          "default": false,
+          "type": "boolean"
+        },
+        "start_price": {
+          "description": "Start price of the grid",
+          "type": "string"
+        },
+        "stop_loss": {
+          "description": "Stop loss (optional)",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "take_profit": {
+          "description": "Take profit (optional)",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "Hip3ConfigJson": {
+      "description": "HIP-3 configuration",
+      "type": "object",
+      "required": [
+        "dex_index",
+        "dex_name"
+      ],
+      "properties": {
+        "asset_index": {
+          "description": "Asset index within the DEX",
+          "default": 0,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "dex_index": {
+          "description": "The index of the DEX",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "dex_name": {
+          "description": "The HIP-3 DEX name",
+          "type": "string"
+        },
+        "quote_currency": {
+          "description": "Quote currency: \"USDC\" or \"USDH\"",
+          "default": "USDC",
+          "type": "string"
+        }
+      }
+    },
+    "InstrumentMetaConfig": {
+      "description": "Instrument metadata configuration",
+      "type": "object",
+      "required": [
+        "lot_size",
+        "tick_size"
+      ],
+      "properties": {
+        "lot_size": {
+          "description": "Lot size (quantity precision)",
+          "type": "string"
+        },
+        "min_notional": {
+          "description": "Minimum notional value",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "min_qty": {
+          "description": "Minimum order quantity",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tick_size": {
+          "description": "Tick size (price precision)",
+          "type": "string"
+        }
+      }
+    },
+    "MMConfigJson": {
+      "description": "Market Maker strategy configuration",
+      "type": "object",
+      "required": [
+        "base_order_size",
+        "base_spread",
+        "max_position_size"
+      ],
+      "properties": {
+        "base_order_size": {
+          "description": "Base order size",
+          "type": "string"
+        },
+        "base_spread": {
+          "description": "Base spread (as decimal, e.g., 0.001 = 0.1%)",
+          "type": "string"
+        },
+        "max_position_size": {
+          "description": "Maximum position size",
+          "type": "string"
+        },
+        "min_price_change_pct": {
+          "description": "Minimum price change to trigger refresh",
+          "default": "0.0005",
+          "type": "string"
+        },
+        "price_skew_gamma": {
+          "description": "Price skew gamma",
+          "default": "0.05",
+          "type": "string"
+        },
+        "size_skew_floor": {
+          "description": "Size skew floor",
+          "default": "0.2",
+          "type": "string"
+        },
+        "skew_mode": {
+          "description": "Skew mode: \"both\", \"size\", \"price\", \"none\"",
+          "default": "both",
+          "type": "string"
+        },
+        "stop_loss": {
+          "description": "Stop loss (optional)",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "take_profit": {
+          "description": "Take profit (optional)",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "MarketConfig": {
+      "description": "Market configuration (V2 format)",
+      "type": "object",
+      "required": [
+        "base",
+        "exchange",
+        "type"
+      ],
+      "properties": {
+        "base": {
+          "description": "Base asset (e.g., \"BTC\")",
+          "type": "string"
+        },
+        "dex": {
+          "description": "DEX name (for HIP-3)",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exchange": {
+          "description": "Exchange name (e.g., \"hyperliquid\")",
+          "type": "string"
+        },
+        "index": {
+          "description": "Market index",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "instrument_meta": {
+          "description": "Instrument metadata",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InstrumentMetaConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quote": {
+          "description": "Quote asset (e.g., \"USDC\")",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "description": "Market type: \"perp\", \"spot\", \"hip3\"",
+          "type": "string"
+        }
+      }
+    },
+    "SyncConfigJson": {
+      "description": "Trade syncer configuration",
+      "type": "object",
+      "required": [
+        "bot_id",
+        "upstream_url"
+      ],
+      "properties": {
+        "bot_id": {
+          "description": "Bot ID for upstream API",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Enable syncing",
+          "default": true,
+          "type": "boolean"
+        },
+        "sync_interval_ms": {
+          "description": "Sync interval in milliseconds",
+          "default": 10000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "timeout_secs": {
+          "description": "HTTP timeout in seconds",
+          "default": 10,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "upstream_url": {
+          "description": "Upstream API base URL",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

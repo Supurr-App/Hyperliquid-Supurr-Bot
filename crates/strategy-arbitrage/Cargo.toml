@@ -1,0 +1,21 @@
+[package]
+name = "strategy-arbitrage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Spot-Perp Arbitrage strategy for exploiting price spreads between spot and perpetual markets"
+
+[dependencies]
+bot-core = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+bot-engine = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
+tracing-subscriber = { workspace = true }
+rust_decimal_macros = { workspace = true }

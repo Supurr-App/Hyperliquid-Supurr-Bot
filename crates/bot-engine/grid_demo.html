@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Grid Strategy Backtest - WASM Demo</title>
+    <style>
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        max-width: 1000px;
+        margin: 0 auto;
+        padding: 2rem;
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        color: #eee;
+        min-height: 100vh;
+      }
+      h1 {
+        color: #00d4ff;
+        text-align: center;
+      }
+      h2 {
+        color: #00d4ff;
+        margin-bottom: 1rem;
+      }
+      .card {
+        background: rgba(255, 255, 255, 0.08);
+        border-radius: 16px;
+        padding: 1.5rem;
+        margin: 1.5rem 0;
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .grid-config {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 1rem;
+      }
+      label {
+        display: block;
+        margin-bottom: 0.5rem;
+        color: #00d4ff;
+        font-weight: 500;
+      }
+      input,
+      textarea,
+      select {
+        width: 100%;
+        padding: 0.75rem;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: rgba(0, 0, 0, 0.3);
+        color: #fff;
+        font-family: monospace;
+        margin-bottom: 1rem;
+        box-sizing: border-box;
+      }
+      select {
+        cursor: pointer;
+      }
+      input:focus,
+      textarea:focus,
+      select:focus {
+        outline: none;
+        border-color: #00d4ff;
+      }
+      button {
+        background: linear-gradient(135deg, #00d4ff 0%, #0077b6 100%);
+        color: white;
+        border: none;
+        padding: 1rem 2rem;
+        border-radius: 12px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        width: 100%;
+        transition:
+          transform 0.2s,
+          box-shadow 0.2s;
+      }
+      button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(0, 212, 255, 0.3);
+      }
+      button:disabled {
+        background: #555;
+        cursor: not-allowed;
+        transform: none;
+      }
+      #results {
+        white-space: pre-wrap;
+        font-family: "Fira Code", monospace;
+        font-size: 0.85rem;
+        background: rgba(0, 0, 0, 0.4);
+        padding: 1rem;
+        border-radius: 8px;
+        max-height: 400px;
+        overflow-y: auto;
+      }
+      .stat {
+        display: inline-block;
+        padding: 0.75rem 1.25rem;
+        background: rgba(0, 212, 255, 0.2);
+        border-radius: 8px;
+        margin: 0.25rem;
+        min-width: 120px;
+      }
+      .stat-value {
+        font-size: 1.4rem;
+        font-weight: bold;
+        color: #00d4ff;
+      }
+      .stat-label {
+        font-size: 0.8rem;
+        color: #999;
+      }
+      .stat-positive {
+        color: #00ff88 !important;
+      }
+      .stat-negative {
+        color: #ff4444 !important;
+      }
+      #version {
+        text-align: center;
+        color: #666;
+        font-size: 0.8rem;
+      }
+      .mode-info {
+        font-size: 0.9rem;
+        color: #aaa;
+        padding: 0.5rem;
+        background: rgba(0, 0, 0, 0.2);
+        border-radius: 4px;
+        margin-top: 0.5rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>📊 Grid Strategy Backtest</h1>
+    <div id="version">Loading...</div>
+
+    <div class="card">
+      <h2>Grid Configuration</h2>
+      <div class="grid-config">
+        <div>
+          <label>Grid Mode</label>
+          <select id="gridMode">
+            <option value="long">Long (Buy Low, Sell High)</option>
+            <option value="neutral" selected>Neutral (Both Directions)</option>
+            <option value="short">Short (Sell High, Buy Low)</option>
+          </select>
+          <div class="mode-info" id="modeInfo">
+            Buy below mid, Sell above mid. Ideal for ranging markets.
+          </div>
+        </div>
+
+        <div>
+          <label>Grid Levels</label>
+          <input type="number" id="gridLevels" value="10" min="2" max="100" />
+        </div>
+
+        <div>
+          <label>Start Price ($)</label>
+          <input type="number" id="startPrice" value="95000" step="100" />
+        </div>
+
+        <div>
+          <label>End Price ($)</label>
+          <input type="number" id="endPrice" value="105000" step="100" />
+        </div>
+
+        <div>
+          <label>Max Investment (USDC)</label>
+          <input type="number" id="maxInvestment" value="1000" step="100" />
+        </div>
+
+        <div>
+          <label>Leverage</label>
+          <input type="number" id="leverage" value="5" min="1" max="50" />
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Price Data (JSON)</h2>
+      <label>Array of {ts_ms, price} - simulate market movement</label>
+      <textarea id="prices" rows="10">
+[
+  {"ts_ms": 1700000000000, "price": "100000"},
+  {"ts_ms": 1700000010000, "price": "99500"},
+  {"ts_ms": 1700000020000, "price": "98000"},
+  {"ts_ms": 1700000030000, "price": "97000"},
+  {"ts_ms": 1700000040000, "price": "96000"},
+  {"ts_ms": 1700000050000, "price": "97500"},
+  {"ts_ms": 1700000060000, "price": "99000"},
+  {"ts_ms": 1700000070000, "price": "101000"},
+  {"ts_ms": 1700000080000, "price": "103000"},
+  {"ts_ms": 1700000090000, "price": "102000"},
+  {"ts_ms": 1700000100000, "price": "100000"}
+]</textarea>
+    </div>
+
+    <div class="card">
+      <button id="runBtn" disabled>Run Grid Backtest</button>
+    </div>
+
+    <div class="card">
+      <h2>Results</h2>
+      <div id="stats"></div>
+      <div id="results">Click "Run Grid Backtest" to see results...</div>
+    </div>
+
+    <script type="module">
+      import init, { run_grid_backtest, get_version } from "./pkg/bot_engine.js";
+
+      // Mode descriptions
+      const modeDescriptions = {
+        long: "All levels are BUY orders. Take profit is SELL above entry. Best for bullish markets.",
+        neutral: "Buy below mid, Sell above mid. Ideal for ranging markets.",
+        short: "All levels are SELL orders. Take profit is BUY below. Best for bearish markets."
+      };
+
+      async function main() {
+        await init();
+        document.getElementById("version").textContent = get_version();
+
+        const modeSelect = document.getElementById("gridMode");
+        const modeInfo = document.getElementById("modeInfo");
+        const btn = document.getElementById("runBtn");
+
+        // Update mode info on change
+        modeSelect.addEventListener("change", () => {
+          modeInfo.textContent = modeDescriptions[modeSelect.value];
+        });
+
+        btn.disabled = false;
+
+        btn.addEventListener("click", async () => {
+          try {
+            btn.disabled = true;
+            btn.textContent = "Running Grid Backtest...";
+
+            const prices = document.getElementById("prices").value;
+            const config = JSON.stringify({
+              grid_mode: document.getElementById("gridMode").value,
+              grid_levels: parseInt(document.getElementById("gridLevels").value),
+              start_price: document.getElementById("startPrice").value,
+              end_price: document.getElementById("endPrice").value,
+              max_investment: document.getElementById("maxInvestment").value,
+              leverage: document.getElementById("leverage").value,
+              spread: "50"  // $50 spread for BTC
+            });
+
+            const resultJson = await run_grid_backtest(prices, config);
+            const result = JSON.parse(resultJson);
+
+            // Determine PnL color
+            const pnl = parseFloat(result.realized_pnl);
+            const pnlClass = pnl >= 0 ? "stat-positive" : "stat-negative";
+            const pnlPrefix = pnl >= 0 ? "+" : "";
+
+            // Display stats
+            document.getElementById("stats").innerHTML = `
+              <div class="stat">
+                <div class="stat-value">${result.trade_count}</div>
+                <div class="stat-label">Trades</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value">$${parseFloat(result.total_volume).toFixed(2)}</div>
+                <div class="stat-label">Volume</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value ${pnlClass}">${pnlPrefix}$${pnl.toFixed(2)}</div>
+                <div class="stat-label">Realized PnL</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value">${parseFloat(result.final_position_qty).toFixed(6)}</div>
+                <div class="stat-label">Position (BTC)</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value">$${parseFloat(result.total_fees).toFixed(4)}</div>
+                <div class="stat-label">Fees</div>
+              </div>
+            `;
+
+            // Display full results
+            document.getElementById("results").textContent = JSON.stringify(result, null, 2);
+          } catch (err) {
+            document.getElementById("results").textContent = "Error: " + err;
+          } finally {
+            btn.disabled = false;
+            btn.textContent = "Run Grid Backtest";
+          }
+        });
+      }
+
+      main().catch((err) => {
+        document.getElementById("results").textContent = "Failed to load WASM: " + err;
+      });
+    </script>
+  </body>
+</html>
