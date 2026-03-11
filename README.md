@@ -58,7 +58,7 @@ Supurr is the opposite bet. **One exchange. One binary. Zero bloat.**
 | ---------------------------- | ------------------------------------- | ----------------------------------- | ------------------------------ |
 | **RAM (idle)**               | **~15 MB**                            | ~500 MB minimum                     | ~1 GB per instance             |
 | **Live Paper Trading**       | ✅ Real DEX prices, simulated fills   | ✅ Sandbox (live data + sim fills)  | ⚠️ Simulated orderbook         |
-| **Hyperliquid Native**       | ✅ First-class — Perp, Spot, HIP-3    | ❌ No adapter                       | ❌ Community connector         |
+| **Hyperliquid Native**       | ✅ First-class — Perp, Spot, HIP-3, Outcome | ❌ No adapter                       | ❌ Community connector         |
 | **Network Upgrade Handling** | ✅ HTTP-only + health-gating          | ❌ Generic retry                    | ⚠️ WS reconnect issues         |
 | **Backtest ↔ Live Parity**   | ✅ Identical code path                | ✅ Identical code path              | ⚠️ Different connectors        |
 | **AI-Native**                | ✅ Natural language bot ops           | ❌                                  | ❌                             |
@@ -130,16 +130,16 @@ Python-based frameworks are fundamentally blocked here — CPython can't compile
 
 ## Strategies
 
-5 production-ready strategies + a trait for building your own. Every strategy works across **Perps**, **Spot**, and **HIP-3** sub-DEX markets.
+5 production-ready strategies + a trait for building your own. Every strategy works across **Perps**, **Spot**, **HIP-3** sub-DEX, and **Prediction Market (Outcome)** markets.
 
-| Strategy                | What It Actually Does                                                                                                                    | Markets           |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| **Grid**                | Places buy/sell limit orders at fixed price intervals. Captures profit from range-bound markets. Auto-rebalances when levels are filled. | Perp, Spot, HIP-3 |
-| **DCA**                 | Dollar-cost averages into positions on a schedule. Configurable intervals, position scaling, and exit targets. Set it and forget it.     | Perp, Spot, HIP-3 |
-| **Market Maker**        | Maintains a two-sided order book with dynamic spreads. Inventory skew management prevents directional exposure from blowing up.          | Perp, Spot, HIP-3 |
-| **Spot-Perp Arbitrage** | Detects and exploits price divergence between spot and perpetual markets. Delta-neutral by construction.                                 | Perp + Spot       |
-| **Tick Trader**         | High-frequency tick-level strategy for capturing micro price movements. Sub-millisecond decision loop.                                   | Perp              |
-| **Custom (yours!)**     | Implement the `Strategy` trait in Rust → build literally any trading logic you can imagine.                                              | Any               |
+| Strategy                | What It Actually Does                                                                                                                    | Markets                       |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| **Grid**                | Places buy/sell limit orders at fixed price intervals. Captures profit from range-bound markets. Auto-rebalances when levels are filled. | Perp, Spot, HIP-3, Outcome   |
+| **DCA**                 | Dollar-cost averages into positions on a schedule. Configurable intervals, position scaling, and exit targets. Set it and forget it.     | Perp, Spot, HIP-3, Outcome   |
+| **Market Maker**        | Maintains a two-sided order book with dynamic spreads. Inventory skew management prevents directional exposure from blowing up.          | Perp, Spot, HIP-3, Outcome   |
+| **Spot-Perp Arbitrage** | Detects and exploits price divergence between spot and perpetual markets. Delta-neutral by construction.                                 | Perp + Spot                   |
+| **Tick Trader**         | High-frequency tick-level strategy for capturing micro price movements. Sub-millisecond decision loop.                                   | Perp                          |
+| **Custom (yours!)**     | Implement the `Strategy` trait in Rust → build literally any trading logic you can imagine.                                              | Any                           |
 
 ```rust
 // Your strategy is a deterministic state machine.
@@ -236,6 +236,59 @@ Every strategy reads from a JSON config:
 ```
 
 > Don't write configs by hand — use `supurr new grid --asset BTC` to generate them interactively.
+
+---
+
+## Prediction Markets (Outcome)
+
+Supurr has first-class support for Hyperliquid's **prediction markets** (Outcome type) — binary Yes/No event markets where you bet on whether a condition will be true at expiry. Examples: "BTC > 69070", "HYPE > 200".
+
+> **Note:** Prediction markets are currently available on **testnet only**.
+
+### How It Works
+
+Each prediction market has an **outcome ID** and two **sides**:
+- Side `0` = **Yes** (you believe the condition will be true)
+- Side `1` = **No** (you believe the condition will be false)
+
+Asset ID encoding: `100,000,000 + (10 × outcome_id + side)`
+
+For example, outcome 516 ("BTC > 69070"):
+- Yes side → asset `100,005,160`
+- No side → asset `100,005,161`
+
+### Configuration
+
+```json
+{
+  "strategy_id": "btc-prediction",
+  "environment": "Testnet",
+  "market": {
+    "exchange": "hyperliquid",
+    "type": "outcome",
+    "name": "BTC > 69070",
+    "outcome_id": 516,
+    "side": 0
+  },
+  "grid": {
+    "start_price": "0.3",
+    "end_price": "0.7",
+    "levels": 5,
+    "order_size": "10"
+  }
+}
+```
+
+Prices range from `0` to `1` — representing the probability of the event happening. A price of `0.65` on the Yes side means the market believes there's a 65% chance the condition will be true.
+
+### Engine Integration
+
+Outcome markets integrate seamlessly with the engine — strategies treat them like any other market via the unified `Exchange` trait:
+
+- **Balance queries** use `spotClearinghouseState` (same as spot)
+- **Fill parsing** uses `-OUTCOME` suffix for instrument IDs
+- **Price lookups** use `#<encoding>` format in `allMids` (e.g., `#5160`)
+- **All strategies** (Grid, DCA, MM) work on Outcome markets with zero code changes
 
 ---
 
