@@ -415,6 +415,8 @@ impl Fee {
 pub enum InstrumentKind {
     Spot,
     Perp,
+    /// Prediction market outcome (testnet-only)
+    Outcome,
 }
 
 /// Instrument metadata (provided by you, not discovered)

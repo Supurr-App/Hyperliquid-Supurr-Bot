@@ -18,7 +18,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["native"]
-native = ["tokio", "reqwest", "strategy-grid", "strategy-dca", "strategy-market-maker", "strategy-arbitrage", "strategy-tick-trader"]
+native = ["tokio", "reqwest", "strategy-grid", "strategy-dca", "strategy-market-maker", "strategy-arbitrage", "strategy-tick-trader", "strategy-rsi"]
 wasm = ["wasm-bindgen", "wasm-bindgen-futures", "gloo-timers", "js-sys", "console_error_panic_hook", "web-sys", "bot-core/wasm", "strategy-grid", "strategy-dca", "strategy-market-maker", "strategy-arbitrage"]
 
 [dependencies]
@@ -41,6 +41,7 @@ strategy-dca = { path = "../strategy-dca", optional = true }
 strategy-market-maker = { path = "../strategy-market-maker", optional = true }
 strategy-arbitrage = { path = "../strategy-arbitrage", optional = true }
 strategy-tick-trader = { path = "../strategy-tick-trader", optional = true }
+strategy-rsi = { path = "../strategy-rsi", optional = true }
 
 # Native-only dependencies (optional)
 tokio = { workspace = true, optional = true }

@@ -20,6 +20,7 @@ use strategy_arbitrage::{ArbitrageConfig, ArbitrageStrategy};
 use strategy_dca::{DCAConfig, DCADirection, DCAStrategy};
 use strategy_grid::{GridConfig, GridMode, GridStrategy};
 use strategy_market_maker::{MarketMaker, MarketMakerConfig, SkewMode};
+use strategy_rsi::{RsiStrategy, RsiStrategyConfig};
 use strategy_tick_trader::{TickTrader, TickTraderConfig};
 
 // =============================================================================
@@ -102,6 +103,11 @@ impl BotConfig {
     /// Check if this is a spot market
     pub fn is_spot(&self) -> bool {
         self.primary_market().is_spot()
+    }
+
+    /// Check if this is a prediction market outcome
+    pub fn is_outcome(&self) -> bool {
+        self.primary_market().is_outcome()
     }
 
     /// Get instrument ID from primary market
@@ -607,6 +613,16 @@ pub fn build_strategy(config: &BotConfig) -> Result<Box<dyn Strategy>> {
             );
         }
         Ok(Box::new(TickTrader::new(tick_config)))
+    } else if strategy_type == "rsi" {
+        // RSI strategy: uses inline Wilder's RSI indicator + bar aggregation
+        let rsi_config: RsiStrategyConfig = config.custom_config("rsi")?;
+        let errors = rsi_config.validate();
+        if !errors.is_empty() {
+            anyhow::bail!("RSI config validation failed: {}", errors.join(", "));
+        }
+        let market = config.primary_market().clone();
+        let environment = config.parse_environment();
+        Ok(Box::new(RsiStrategy::new(rsi_config, market, environment)))
     } else if is_mm {
         // Market maker strategy
         let mm_json = config

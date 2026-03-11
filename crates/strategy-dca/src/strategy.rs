@@ -684,6 +684,7 @@ mod tests {
             base: "HYPE".to_string(),
             quote: "USDC".to_string(),
             index: 1,
+            instrument_meta: None,
         });
         let strategy = DCAStrategy::new(config);
 

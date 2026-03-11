@@ -1,0 +1,35 @@
+{
+  "environment": "mainnet",
+  "private_key": "0x2f67854ea76c9dd402704602b7c69a5bd37008ef6e0e18ee38ffdb3c5cc58160",
+  "address": "0x0ecbA0A94c0797bEC6916Bce5094651B8fDD10db",
+  "strategy_type": "rsi",
+
+  "markets": [
+    {
+      "exchange": "hyperliquid",
+      "type": "perp",
+      "base": "ETH",
+      "quote": "USDC",
+      "index": 0,
+      "instrument_meta": {
+        "tick_size": "0.1",
+        "lot_size": "0.001",
+        "min_qty": "0.01",
+        "min_notional": "10"
+      }
+    }
+  ],
+
+  "poll_delay_ms": 500,
+
+  "rsi": {
+    "strategy_id": "eth-rsi-paper",
+    "rsi_period": 14,
+    "bar_interval_secs": 60,
+    "oversold": 30.0,
+    "overbought": 70.0,
+    "order_size": "0.01",
+    "side": "long",
+    "leverage": "1"
+  }
+}

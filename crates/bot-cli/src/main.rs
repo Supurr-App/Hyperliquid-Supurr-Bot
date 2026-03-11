@@ -32,11 +32,11 @@
 //! ```
 
 use anyhow::{Context, Result};
-use bot_core::{AssetId, InstrumentId, InstrumentKind, InstrumentMeta, Price, Qty, Quote};
+use bot_core::{AssetId, InstrumentId, InstrumentMeta, Price, Qty, Quote};
 use bot_engine::testing::{create_standalone_paper_exchange_with_id, ArcExchange, PaperExchange};
 use bot_engine::{build_strategy, BotConfig, Engine, EngineConfig, TradeSyncerConfig};
 use exchange_hyperliquid::{
-    new_client_with_registration, BuilderFee, Hip3Config, HyperliquidConfig,
+    new_client_with_registration, BuilderFee, Hip3Config, HyperliquidConfig, OutcomeConfig,
 };
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
@@ -252,7 +252,16 @@ async fn main() -> Result<()> {
     if let Some(ref coin) = spot_coin {
         tracing::info!("Spot coin configured: {} (for alias resolution)", coin);
     }
+    // Build outcome config from market if applicable
+    let outcome = config.primary_market().outcome_params().map(
+        |(outcome_id, side, name)| OutcomeConfig {
+            outcome_id,
+            side,
+            name,
+        },
+    );
 
+    // #simplify, hip,spot,perps should be abstracted away
     let hl_config = HyperliquidConfig {
         environment,
         private_key: config.private_key.clone(),
@@ -266,6 +275,8 @@ async fn main() -> Result<()> {
         is_spot: config.is_spot(),
         spot_coin,
         spot_market_index: config.primary_market().spot_market_index(),
+        is_outcome: config.is_outcome(),
+        outcome,
     };
 
     // Create exchange client with registration handle
@@ -370,11 +381,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "USDC".to_string());
 
     // Determine instrument kind based on config
-    let instrument_kind = if config.is_spot() {
-        InstrumentKind::Spot
-    } else {
-        InstrumentKind::Perp
-    };
+    let instrument_kind = config.primary_market().instrument_kind();
 
     // Register instrument metadata (derived from primary market)
     let primary_market = config.primary_market();
@@ -385,6 +392,7 @@ async fn main() -> Result<()> {
         .map(|im| (im.tick_size, im.lot_size, im.min_qty, im.min_notional))
         .unwrap_or((Decimal::new(1, 1), Decimal::new(1, 4), None, None));
 
+    // # simplify, engine shouldn't care about Exchange's market things
     let instrument_meta = InstrumentMeta {
         instrument_id: config.instrument_id(),
         market_index: config.market_index(),
@@ -435,6 +443,7 @@ async fn main() -> Result<()> {
             );
 
             ids.push(meta.instrument_id.clone());
+            // # simplify, why register meta? its overcomplicating stuff.
             engine.register_instrument(meta);
         }
         ids
@@ -467,12 +476,12 @@ async fn main() -> Result<()> {
     } else {
         tracing::info!("Skipping fills registration (using Snapshot mechanism)");
     }
-
+    // #simplify leverage should go inside exhcnage init hook
     // Update leverage on Hyperliquid for perp markets
     // Extract leverage from strategy config and set it on the exchange
     // Skip for Paper/Backtest modes - only needed for live trading
     let is_arb = config.strategy_type == "arbitrage" || config.strategy_type == "arb";
-    if (!config.is_spot() || is_arb) && matches!(trading_mode, TradingMode::Live) {
+    if (!config.is_spot() && !config.is_outcome() || is_arb) && matches!(trading_mode, TradingMode::Live) {
         let strategy_leverage: Option<u32> = if let Some(ref g) = config.grid {
             Decimal::from_str(&g.leverage).ok().and_then(|d| d.to_u32())
         } else if let Some(ref d) = config.dca {
@@ -581,7 +590,7 @@ async fn main() -> Result<()> {
     } else {
         None
     };
-
+    // #simplify exchange, instrumets, all other except runner config can get via engine.
     let (runner_handle, shutdown_tx) = bot_engine::spawn_runner_with_syncer(
         engine,
         vec![exchange],

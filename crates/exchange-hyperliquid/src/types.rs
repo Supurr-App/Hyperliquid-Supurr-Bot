@@ -67,6 +67,37 @@ impl Hip3Config {
     }
 }
 
+/// Prediction market outcome configuration (testnet-only).
+///
+/// Outcomes are binary event markets. Each outcome has two sides (Yes/No).
+/// Asset ID calculation: `100_000_000 + (10 * outcome_id + side)`
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OutcomeConfig {
+    /// Outcome ID from outcomeMeta (e.g., 516)
+    pub outcome_id: u32,
+    /// Side: 0 = Yes, 1 = No
+    pub side: u8,
+    /// Human-readable name (e.g., "BTC > 69070")
+    pub name: String,
+}
+
+impl OutcomeConfig {
+    /// Calculate the encoding: `10 * outcome_id + side`.
+    pub fn encoding(&self) -> u32 {
+        10 * self.outcome_id + self.side as u32
+    }
+
+    /// Calculate the asset ID for order placement: `100_000_000 + encoding`.
+    pub fn asset_id(&self) -> u32 {
+        100_000_000 + self.encoding()
+    }
+
+    /// Get the coin name used in allMids/fills: `#<encoding>`.
+    pub fn coin_name(&self) -> String {
+        format!("#{}", self.encoding())
+    }
+}
+
 /// Hyperliquid client configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HyperliquidConfig {
@@ -119,6 +150,19 @@ pub struct HyperliquidConfig {
     /// Formula: @{spot_market_index - 10000} e.g., 10107 -> @107
     #[serde(default)]
     pub spot_market_index: Option<u32>,
+
+    /// Whether this is a prediction market outcome (testnet-only).
+    /// When true:
+    /// - Balance queries use spotClearinghouseState (same as spot)
+    /// - Fill parsing uses -OUTCOME suffix
+    /// - Asset ID uses 100_000_000 + encoding scheme
+    #[serde(default)]
+    pub is_outcome: bool,
+
+    /// Optional prediction market outcome configuration.
+    /// Must be set when is_outcome is true.
+    #[serde(default)]
+    pub outcome: Option<OutcomeConfig>,
 }
 
 impl HyperliquidConfig {
@@ -150,6 +194,8 @@ impl Default for HyperliquidConfig {
             is_spot: false,
             spot_coin: None,
             spot_market_index: None,
+            is_outcome: false,
+            outcome: None,
         }
     }
 }

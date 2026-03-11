@@ -1,0 +1,16 @@
+[package]
+name = "strategy-rsi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "RSI-based trading strategy with inline Wilder's RSI indicator"
+
+[dependencies]
+bot-core = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+serde = { workspace = true }
+schemars = { workspace = true }
+tracing = { workspace = true }

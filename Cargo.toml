@@ -9,7 +9,9 @@ members = [
     "crates/strategy-dca",
     "crates/strategy-grid",
     "crates/strategy-market-maker",
+    "crates/strategy-rsi",
     "crates/strategy-tick-trader",
+    "crates/strategy-regime-classifier",
 ]
 # Default to building CLI and helper binaries, skip WASM crates to prevent feature conflicts
 default-members = [
@@ -33,6 +35,7 @@ strategy-tick-trader = { path = "crates/strategy-tick-trader" }
 strategy-grid = { path = "crates/strategy-grid" }
 strategy-dca = { path = "crates/strategy-dca" }
 strategy-arbitrage = { path = "crates/strategy-arbitrage" }
+strategy-rsi = { path = "crates/strategy-rsi" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["rt-multi-thread", "sync", "time", "macros", "signal"] }

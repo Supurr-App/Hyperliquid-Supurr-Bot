@@ -36,4 +36,4 @@ pub mod types;
 
 pub use client::{new_client, new_client_with_registration, HyperliquidClient};
 pub use signing::HyperliquidSigner;
-pub use types::{BuilderFee, Hip3Config, HyperliquidConfig};
+pub use types::{BuilderFee, Hip3Config, HyperliquidConfig, OutcomeConfig};

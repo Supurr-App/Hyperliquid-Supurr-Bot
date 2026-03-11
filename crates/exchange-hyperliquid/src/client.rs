@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 use crate::signing::{decimal_to_wire, timestamp_ms, HyperliquidSigner};
-use crate::types::{Hip3Config, HyperliquidConfig};
+use crate::types::{Hip3Config, HyperliquidConfig, OutcomeConfig};
 
 /// Response types from Hyperliquid API (info endpoints)
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -66,6 +66,8 @@ pub struct HyperliquidClient {
     seen_trades: Arc<RwLock<std::collections::HashSet<String>>>,
     /// Cached HIP-3 config for quick access
     hip3: Option<Hip3Config>,
+    /// Cached outcome config for quick access
+    outcome: Option<OutcomeConfig>,
 }
 
 impl HyperliquidClient {
@@ -83,6 +85,9 @@ impl HyperliquidClient {
         // Clone HIP-3 config for quick access
         let hip3 = config.hip3.clone();
 
+        // Clone outcome config for quick access
+        let outcome = config.outcome.clone();
+
         // Log HIP-3 configuration if present
         if let Some(ref h) = hip3 {
             tracing::info!(
@@ -95,6 +100,19 @@ impl HyperliquidClient {
             );
         }
 
+        // Log outcome configuration if present
+        if let Some(ref o) = outcome {
+            tracing::info!(
+                "[OUTCOME] Configured: name='{}', outcome_id={}, side={}, encoding={}, asset_id={}, coin='{}'",
+                o.name,
+                o.outcome_id,
+                o.side,
+                o.encoding(),
+                o.asset_id(),
+                o.coin_name()
+            );
+        }
+
         Ok(Self {
             config,
             signer,
@@ -103,12 +121,18 @@ impl HyperliquidClient {
             last_fill_time: Arc::new(RwLock::new(0)),
             seen_trades: Arc::new(RwLock::new(std::collections::HashSet::new())),
             hip3,
+            outcome,
         })
     }
 
     /// Check if this client is configured for HIP-3
     pub fn is_hip3(&self) -> bool {
         self.hip3.is_some()
+    }
+
+    /// Check if this client is configured for prediction markets
+    pub fn is_outcome(&self) -> bool {
+        self.outcome.is_some()
     }
 
     /// Get the DEX name for API calls (None for default Hyperliquid)
@@ -133,10 +157,13 @@ impl HyperliquidClient {
     }
 
     /// Get the effective asset ID for order placement.
-    /// For HIP-3, this uses the calculated HIP-3 asset ID.
-    /// For regular perps, this returns the provided market_index.
+    /// For outcomes, uses 100_000_000 + encoding.
+    /// For HIP-3, uses the calculated HIP-3 asset ID.
+    /// For regular perps/spot, returns the provided market_index.
     fn effective_asset_id(&self, market_index: &MarketIndex) -> u32 {
-        if let Some(ref hip3) = self.hip3 {
+        if let Some(ref outcome) = self.outcome {
+            outcome.asset_id()
+        } else if let Some(ref hip3) = self.hip3 {
             hip3.calculate_asset_id()
         } else {
             market_index.value()
@@ -379,11 +406,19 @@ impl HyperliquidClient {
         fills
             .into_iter()
             .map(|f| {
-                // Detect spot vs perp per-fill: HL spot fills have coin like "@107",
-                // perp fills have the coin name like "HYPE".
-                // This allows a single client to handle mixed spot+perp fills (arb strategy).
+                // Detect market type from fill coin format:
+                //   "#5160"  → outcome fill
+                //   "@107"   → spot fill
+                //   "BTC"    → perp fill
+                let is_outcome_fill = f.coin.starts_with('#');
                 let is_spot_fill = f.coin.starts_with('@');
-                let suffix = if is_spot_fill { "SPOT" } else { "PERP" };
+                let suffix = if is_outcome_fill {
+                    "OUTCOME"
+                } else if is_spot_fill {
+                    "SPOT"
+                } else {
+                    "PERP"
+                };
                 let trade_id = f
                     .tid
                     .map(|tid| TradeId::new(tid.to_string()))
@@ -412,26 +447,18 @@ impl HyperliquidClient {
                 );
                 let fee = bot_core::Fee::new(fee_amount, fee_asset);
 
-                // For spot BUY orders, the fee is charged in the base asset (coin).
-                // We need to report the NET quantity actually received, not the gross order qty.
-                // This ensures TP sell orders don't try to sell more than we actually have.
-                //
-                // Example: BUY 1.0 HYPE with 0.1% fee
                 // Always use gross qty from the exchange here.
                 // Fee deduction for position tracking is handled downstream
-                // in the engine runner's apply_fill_and_emit_events, which
-                // computes net_qty and uses it for position updates.
+                // in the engine runner's apply_fill_and_emit_events.
                 let qty = Qty::new(gross_qty);
 
-                // Map coin to instrument_id with correct suffix
-                // For HIP-3 coins like "xyz:AAPL", keep the full name
-                // For regular coins like "BTC", add the appropriate suffix
-                // For spot, use -SPOT suffix; for perps, use -PERP suffix
-                //
-                // Hyperliquid sometimes returns spot fills with an alias like "@107" instead
-                // of the coin name "HYPE". If spot_coin is configured and the fill's coin
-                // starts with "@", use the configured spot_coin name instead.
-                let coin_name = if is_spot_fill && f.coin.starts_with('@') {
+                // Map coin to instrument_id with correct suffix.
+                // Outcome fills use the coin name directly (e.g., "#5160-OUTCOME").
+                // Spot fills may need alias resolution ("@107" → configured coin name).
+                let coin_name = if is_outcome_fill {
+                    // Outcome fills: coin is already "#5160" format, use as-is
+                    f.coin.clone()
+                } else if is_spot_fill && f.coin.starts_with('@') {
                     if let Some(ref configured_coin) = self.config.spot_coin {
                         tracing::debug!("Resolving spot alias: {} -> {}", f.coin, configured_coin);
                         configured_coin.clone()
@@ -515,6 +542,11 @@ impl HyperliquidClient {
     /// clearinghouse. For USDC-collateral HIP-3 DEXes with DEX abstraction enabled,
     /// the main clearinghouse is used.
     pub async fn fetch_user_state(&self) -> Result<serde_json::Value, ExchangeError> {
+        // For outcome trading, query the spot clearinghouse (outcomes are spot-like)
+        if self.config.is_outcome {
+            return self.fetch_spot_user_state().await;
+        }
+
         // For spot trading, query the spot clearinghouse
         if self.config.is_spot {
             return self.fetch_spot_user_state().await;
@@ -1071,11 +1103,20 @@ impl Exchange for HyperliquidClient {
         for instrument in instruments {
             // Extract coin name from instrument (e.g., "BTC-PERP" -> "BTC")
             // For HIP-3: "xyz:AAPL-PERP" -> "xyz:AAPL"
+            // For Outcome: "#5160-OUTCOME" -> "#5160"
             let instrument_str = instrument.to_string();
             let is_spot_instrument = instrument_str.ends_with("-SPOT");
+            let is_outcome_instrument = instrument_str.ends_with("-OUTCOME");
 
             // Determine the lookup key based on market type
-            let lookup_key = if is_spot_instrument && self.config.spot_market_index.is_some() {
+            let lookup_key = if is_outcome_instrument {
+                // Outcome format: "#5160-OUTCOME" -> "#5160"
+                instrument_str
+                    .rsplit_once('-')
+                    .map(|(base, _)| base)
+                    .unwrap_or(&instrument_str)
+                    .to_string()
+            } else if is_spot_instrument && self.config.spot_market_index.is_some() {
                 // For spot instruments with configured market index, use @{index-10000}
                 // e.g., market_index 10107 -> lookup key "@107"
                 let spot_index = self.config.spot_market_index.unwrap() - 10000;
@@ -1179,6 +1220,24 @@ impl Exchange for HyperliquidClient {
             account_value,
             unrealized_pnl,
         })
+    }
+}
+
+// =============================================================================
+// Outcome-specific methods
+// =============================================================================
+
+impl HyperliquidClient {
+    /// Fetch outcome metadata from the testnet info endpoint.
+    ///
+    /// Returns the full outcomeMeta response including outcomes and questions.
+    /// This is only available on testnet.
+    pub async fn fetch_outcome_meta(&self) -> Result<serde_json::Value, ExchangeError> {
+        let payload = serde_json::json!({
+            "type": "outcomeMeta"
+        });
+
+        self.info_request(payload).await
     }
 }
 

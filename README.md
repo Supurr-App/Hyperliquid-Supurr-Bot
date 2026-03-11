@@ -56,7 +56,7 @@ Supurr is the opposite bet. **One exchange. One binary. Zero bloat.**
 
 |                              | **Supurr**                            | **NautilusTrader**                  | **Hummingbot**                 |
 | ---------------------------- | ------------------------------------- | ----------------------------------- | ------------------------------ |
-| **RAM (idle)**               | **~15 MB**                            | ~8 GB minimum                       | ~4 GB per instance             |
+| **RAM (idle)**               | **~15 MB**                            | ~500 MB minimum                     | ~1 GB per instance             |
 | **Live Paper Trading**       | ✅ Real DEX prices, simulated fills   | ✅ Sandbox (live data + sim fills)  | ⚠️ Simulated orderbook         |
 | **Hyperliquid Native**       | ✅ First-class — Perp, Spot, HIP-3    | ❌ No adapter                       | ❌ Community connector         |
 | **Network Upgrade Handling** | ✅ HTTP-only + health-gating          | ❌ Generic retry                    | ⚠️ WS reconnect issues         |
@@ -69,6 +69,7 @@ Supurr is the opposite bet. **One exchange. One binary. Zero bloat.**
 | **Concurrency**              | Native async, zero-cost futures       | Rust core + Python GIL              | Async (GIL-bounded)            |
 | **Strategy Safety**          | Ownership model prevents shared state | Python classes (mutable state)      | Python classes (mutable state) |
 | **Language**                 | Pure Rust                             | Python + Rust + Cython              | Python + Cython                |
+| **Browser / WASM**           | ✅ Engine compiles to WASM            | ❌ Python runtime required          | ❌ Python runtime required     |
 | **Codebase**                 | 24K LOC, 9 crates                     | 100K+ LOC, multi-language           | 100K+ LOC, 40+ connectors      |
 
 #### 🛡️ Reliability-First Execution on Hyperliquid
@@ -116,6 +117,14 @@ supurr monitor --watch                      # live dashboard
 Hummingbot's [official docs](https://hummingbot.org) recommend **4 GB RAM per instance** — macOS users have [reported 30 GB+ on startup](https://github.com/hummingbot/hummingbot/issues). NautilusTrader recommends **8 GB minimum**. Supurr idles at **~15 MB** — no Python runtime, no garbage collector, no pandas, no numpy. Just compiled Rust.
 
 > Run **dozens of Supurr instances** on the same machine that struggles with **one** Hummingbot.
+
+#### 🌐 Runs in the Browser — WASM Target
+
+Supurr's engine compiles to **WebAssembly**, enabling backtesting and strategy simulation directly in the browser — no server, no install, no Rust toolchain needed. The same Rust code that runs on your server runs in a browser tab.
+
+Python-based frameworks are fundamentally blocked here — CPython can't compile to WASM. Rust's zero-runtime design makes the entire engine portable to `wasm32-unknown-unknown` with feature flags swapping out OS-specific dependencies (tokio → browser event loop, filesystem → in-memory).
+
+> Your users can backtest strategies in a web UI without downloading anything.
 
 ---
 
