@@ -293,24 +293,50 @@ async fn main() -> Result<()> {
     // - Live: use real exchange directly
     // - Paper: wrap real exchange in PaperExchange for simulated fills (uses real quotes)
     // - Backtest: use standalone PaperExchange with pre-loaded historical prices
+    let sim_config = config.effective_simulation_config();
     let (exchange, backtest_paper): (Arc<dyn bot_core::Exchange>, Option<Arc<PaperExchange<_>>>) =
         match &trading_mode {
             TradingMode::Paper => {
                 tracing::info!("📄 PAPER TRADING MODE - orders will be simulated locally");
+                let starting_balance = Decimal::from_str(&sim_config.starting_balance_usdc)
+                    .unwrap_or(Decimal::new(10_000, 0));
+                let fee_rate = Decimal::from_str(&sim_config.fee_rate)
+                    .unwrap_or(dec!(0.00025));
+
                 let mut initial_balances = std::collections::HashMap::new();
-                initial_balances.insert(AssetId::new("USDC"), Decimal::new(10_000, 0));
-                initial_balances.insert(AssetId::new("USDH"), Decimal::new(10_000, 0));
+                initial_balances.insert(AssetId::new("USDC"), starting_balance);
+                initial_balances.insert(AssetId::new("USDH"), starting_balance);
                 let wrapped_exchange = ArcExchange::new(real_exchange);
-                (
-                    Arc::new(PaperExchange::new(wrapped_exchange, initial_balances)),
-                    None,
-                )
+                let paper = Arc::new(PaperExchange::new(wrapped_exchange, initial_balances));
+                paper.set_fee_rate(fee_rate).await;
+
+                tracing::info!(
+                    "Paper exchange: balance={} USDC, fee_rate={}",
+                    starting_balance, fee_rate
+                );
+
+                // Inject strategy leverage into MarginLedger
+                if let Some((leverage, max_leverage)) = config.strategy_leverage() {
+                    let instrument = config.instrument_id();
+                    paper.set_instrument_leverage(&instrument, leverage, max_leverage).await;
+                    tracing::info!(
+                        "Paper leverage set: {}x (max {}x) for {}",
+                        leverage, max_leverage, instrument
+                    );
+                }
+
+                (paper.clone() as Arc<dyn bot_core::Exchange>, None)
             }
             TradingMode::Backtest { prices_path } => {
                 tracing::info!(
                     "📊 BACKTEST MODE - running with historical prices from {:?}",
                     prices_path
                 );
+
+                let starting_balance = Decimal::from_str(&sim_config.starting_balance_usdc)
+                    .unwrap_or(Decimal::new(10_000, 0));
+                let fee_rate = Decimal::from_str(&sim_config.fee_rate)
+                    .unwrap_or(dec!(0.00025));
 
                 // Load prices from JSON file
                 let prices_str = std::fs::read_to_string(prices_path)
@@ -333,15 +359,29 @@ async fn main() -> Result<()> {
 
                 // Create standalone paper exchange with "hyperliquid" ID for strategy compatibility
                 let mut initial_balances = std::collections::HashMap::new();
-                initial_balances.insert(AssetId::new("USDC"), Decimal::new(100_000, 0)); // 100k for backtest
+                initial_balances.insert(AssetId::new("USDC"), starting_balance);
                 let paper = Arc::new(create_standalone_paper_exchange_with_id(
                     initial_balances,
                     "hyperliquid",
                     config.parse_environment(),
                 ));
 
-                // Set 0.02% fee rate for realistic backtest simulation
-                paper.set_fee_rate(dec!(0.0002)).await;
+                paper.set_fee_rate(fee_rate).await;
+
+                tracing::info!(
+                    "Backtest exchange: balance={} USDC, fee_rate={}",
+                    starting_balance, fee_rate
+                );
+
+                // Inject strategy leverage into MarginLedger
+                if let Some((leverage, max_leverage)) = config.strategy_leverage() {
+                    let instrument = config.instrument_id();
+                    paper.set_instrument_leverage(&instrument, leverage, max_leverage).await;
+                    tracing::info!(
+                        "Backtest leverage set: {}x (max {}x) for {}",
+                        leverage, max_leverage, instrument
+                    );
+                }
 
                 // Convert prices to quotes and queue them
                 let instrument = config.instrument_id();

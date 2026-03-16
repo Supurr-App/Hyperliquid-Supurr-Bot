@@ -84,6 +84,11 @@ pub struct BotConfig {
     #[serde(default)]
     pub sync: Option<SyncConfigJson>,
 
+    /// Simulation configuration (paper/backtest)
+    /// Optional — uses sensible defaults if absent.
+    #[serde(default)]
+    pub simulation: Option<SimulationConfig>,
+
     // -------------------------------------------------------------------------
     // Custom strategy configs (captured automatically via serde flatten)
     // -------------------------------------------------------------------------
@@ -174,6 +179,34 @@ impl BotConfig {
             "mainnet" | "main" | "prod" => Environment::Mainnet,
             _ => Environment::Testnet,
         }
+    }
+
+    /// Extract strategy leverage and max_leverage from whichever strategy config is active.
+    /// Returns `Some((leverage, max_leverage))` if the active strategy has leverage settings.
+    pub fn strategy_leverage(&self) -> Option<(Decimal, Decimal)> {
+        if let Some(ref g) = self.grid {
+            let lev = Decimal::from_str(&g.leverage).ok()?;
+            let max = Decimal::from_str(&g.max_leverage).ok()?;
+            Some((lev, max))
+        } else if let Some(ref d) = self.dca {
+            let lev = Decimal::from_str(&d.leverage).ok()?;
+            let max = Decimal::from_str(&d.max_leverage).ok()?;
+            Some((lev, max))
+        } else if let Some(ref a) = self.arbitrage {
+            let lev = Decimal::from_str(&a.perp_leverage).ok()?;
+            // Arb doesn't have explicit max_leverage, use a sensible default
+            Some((lev, Decimal::new(50, 0)))
+        } else {
+            None
+        }
+    }
+
+    /// Get the effective simulation config, falling back to defaults if absent.
+    pub fn effective_simulation_config(&self) -> SimulationConfig {
+        self.simulation.clone().unwrap_or(SimulationConfig {
+            starting_balance_usdc: default_starting_balance(),
+            fee_rate: default_fee_rate(),
+        })
     }
 }
 
@@ -356,6 +389,23 @@ pub struct SyncConfigJson {
     pub enabled: bool,
 }
 
+/// Simulation configuration for paper trading and backtesting.
+/// All fields are optional with sensible defaults.
+///
+/// Example JSON:
+/// ```json
+/// { "simulation": { "starting_balance_usdc": "5000", "fee_rate": "0.0002" } }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SimulationConfig {
+    /// Starting USDC balance (default: "10000")
+    #[serde(default = "default_starting_balance")]
+    pub starting_balance_usdc: String,
+    /// Fee rate as decimal (default: "0.00025" = 0.025%)
+    #[serde(default = "default_fee_rate")]
+    pub fee_rate: String,
+}
+
 // =============================================================================
 // Default value functions
 // =============================================================================
@@ -410,6 +460,14 @@ fn default_sync_timeout() -> u64 {
 
 fn default_sync_enabled() -> bool {
     true
+}
+
+fn default_starting_balance() -> String {
+    "10000".to_string()
+}
+
+fn default_fee_rate() -> String {
+    "0.00025".to_string() // 0.025% taker fee (Hyperliquid default)
 }
 
 fn default_poll_delay_ms() -> u64 {

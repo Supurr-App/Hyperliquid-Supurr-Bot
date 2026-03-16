@@ -639,6 +639,10 @@ pub struct PositionSnapshot {
     pub qty: Decimal,
     pub avg_entry_px: Option<Price>,
     pub unrealized_pnl: Option<Decimal>,
+    /// Liquidation price for this position (if available).
+    /// - Live: from Hyperliquid's `clearinghouseState` (`liquidationPx`)
+    /// - Paper/Backtest: computed by `MarginLedger`
+    pub liquidation_px: Option<Decimal>,
 }
 
 // =============================================================================

@@ -17,6 +17,9 @@ pub mod inventory;
 pub mod order_manager;
 pub mod poll_guard;
 
+// Simulation layer: margin-aware accounting for paper/backtest (always available)
+pub mod simulation;
+
 // Testing and paper trading infrastructure (always available)
 pub mod testing;
 

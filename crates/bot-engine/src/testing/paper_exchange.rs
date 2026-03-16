@@ -3,8 +3,10 @@
 //! Wraps a real exchange for quote data but simulates fills locally.
 //! Orders fill when the quote price crosses the order price.
 //! Uses FillSimulator for shared fill matching logic.
+//! Uses MarginLedger for accurate perp margin accounting.
 
 use super::fill_simulator::{FillSimulator, PendingOrder};
+use crate::simulation::MarginLedger;
 use async_lock::RwLock;
 use bot_core::{
     AccountState, AssetId, ClientOrderId, Exchange, ExchangeError, ExchangeId, ExchangeOrderId,
@@ -171,6 +173,8 @@ impl Exchange for NoOpExchange {
 struct PaperState {
     /// Fill simulator handles pending orders, balances, and fill matching
     simulator: FillSimulator,
+    /// Margin ledger for accurate perp accounting (positions, margin, equity)
+    margin_ledger: MarginLedger,
     /// Simulated fills waiting to be returned
     simulated_fills: Vec<Fill>,
     /// Current time (for fill timestamps)
@@ -183,8 +187,6 @@ struct PaperState {
     use_injected_quotes: bool,
     /// Queued quotes for batch backtesting (FIFO)
     quote_queue: VecDeque<Quote>,
-    /// PERP positions for test observability (positive=long, negative=short)
-    perp_positions: HashMap<InstrumentId, Decimal>,
 }
 
 /// Type alias for standalone PaperExchange (no inner exchange dependency)
@@ -242,17 +244,23 @@ pub struct PaperExchange<E: Exchange> {
 impl<E: Exchange> PaperExchange<E> {
     /// Create a new paper exchange wrapping a real quote source
     pub fn new(quote_source: E, initial_balances: HashMap<AssetId, Decimal>) -> Self {
+        // Extract starting USDC for the margin ledger
+        let starting_usdc = initial_balances
+            .get(&AssetId::new("USDC"))
+            .copied()
+            .unwrap_or(Decimal::ZERO);
+
         Self {
             quote_source,
             state: Arc::new(RwLock::new(PaperState {
                 simulator: FillSimulator::new(initial_balances),
+                margin_ledger: MarginLedger::new(starting_usdc, Decimal::ZERO),
                 simulated_fills: Vec::new(),
                 time_ms: bot_core::now_ms(),
                 last_quotes: HashMap::new(),
                 injected_quotes: HashMap::new(),
                 use_injected_quotes: false,
                 quote_queue: VecDeque::new(),
-                perp_positions: HashMap::new(),
             })),
         }
     }
@@ -279,7 +287,9 @@ impl<E: Exchange> PaperExchange<E> {
     /// Set fee rate for fill simulation (e.g., 0.0004 = 0.04%)
     /// For spot BUY orders, fee is deducted from base asset
     pub async fn set_fee_rate(&self, fee_rate: Decimal) {
-        self.state.write().await.simulator.set_fee_rate(fee_rate);
+        let mut state = self.state.write().await;
+        state.simulator.set_fee_rate(fee_rate);
+        state.margin_ledger.set_fee_rate(fee_rate);
     }
 
     /// Get current balances (for testing)
@@ -308,13 +318,9 @@ impl<E: Exchange> PaperExchange<E> {
         let instrument_str = instrument.to_string();
         let state = self.state.read().await;
 
-        // For PERP instruments, use tracked perp positions
+        // For PERP instruments, use margin ledger
         if instrument_str.ends_with("-PERP") {
-            return state
-                .perp_positions
-                .get(instrument)
-                .copied()
-                .unwrap_or_default();
+            return state.margin_ledger.position_qty(instrument);
         }
 
         // For SPOT, position is the base asset balance
@@ -324,6 +330,25 @@ impl<E: Exchange> PaperExchange<E> {
             AssetId::new(&instrument_str)
         };
         state.simulator.balance(&base_asset)
+    }
+
+    /// Set leverage for an instrument in the margin ledger
+    pub async fn set_instrument_leverage(
+        &self,
+        instrument: &InstrumentId,
+        leverage: Decimal,
+        max_leverage: Decimal,
+    ) {
+        self.state
+            .write()
+            .await
+            .margin_ledger
+            .set_leverage(instrument, leverage, max_leverage);
+    }
+
+    /// Get the margin ledger's free USDC (for testing)
+    pub async fn free_usdc(&self) -> Decimal {
+        self.state.read().await.margin_ledger.free_usdc()
     }
 
     // =========================================================================
@@ -418,76 +443,71 @@ impl<E: Exchange> PaperExchange<E> {
         let simulated = state.simulator.check_fills(&quotes, time_ms);
 
         for sim_fill in simulated {
-            // Track PERP positions for test observability
+            // Apply margin accounting for PERP fills
             let inst_str = sim_fill.fill.instrument.to_string();
             if inst_str.ends_with("-PERP") {
-                let pos = state
-                    .perp_positions
-                    .entry(sim_fill.fill.instrument.clone())
-                    .or_default();
-                match sim_fill.fill.side {
-                    bot_core::OrderSide::Buy => *pos += sim_fill.fill.qty.0,
-                    bot_core::OrderSide::Sell => *pos -= sim_fill.fill.qty.0,
-                }
+                state.margin_ledger.apply_perp_fill(
+                    &sim_fill.fill.instrument,
+                    sim_fill.fill.side,
+                    sim_fill.fill.price.0,
+                    sim_fill.fill.qty.0,
+                    sim_fill.fill.fee.amount,
+                );
             }
             state.simulated_fills.push(sim_fill.fill);
         }
     }
 
     /// Check if balance is sufficient for order.
-    /// For PERP instruments, shorting is allowed with margin only (no base asset required).
-    /// For SPOT, selling requires the base asset.
+    /// For PERP instruments: uses margin-aware check (notional / leverage).
+    /// For SPOT: selling requires the base asset, buying requires USDC.
     fn check_balance_for_order(
         simulator: &FillSimulator,
+        margin_ledger: &MarginLedger,
         order: &OrderInput,
     ) -> Result<(), String> {
-        let quote_asset = AssetId::new("USDC");
         let instrument_str = order.instrument.to_string();
-
-        // Check if this is a perp instrument (ends with -PERP)
         let is_perp = instrument_str.ends_with("-PERP");
 
-        if order.side == bot_core::OrderSide::Buy {
-            // BUY: always need quote currency (USDC)
-            let required = order.price.0 * order.qty.0;
-            let available = simulator.balance(&quote_asset);
-
-            if required > available {
-                return Err(format!(
-                    "Insufficient balance: need {} USDC, have {}",
-                    required, available
-                ));
-            }
-        } else if is_perp {
-            // SELL on PERP: This is opening a short, only need margin
-            let required_margin = order.price.0 * order.qty.0;
-            let available = simulator.balance(&quote_asset);
-
-            if required_margin > available {
-                return Err(format!(
-                    "Insufficient margin for short: need {} USDC, have {}",
-                    required_margin, available
-                ));
-            }
+        if is_perp {
+            // PERP: delegate to margin-aware check
+            margin_ledger.check_margin_for_perp_order(
+                &order.instrument,
+                order.side,
+                order.price.0,
+                order.qty.0,
+                order.reduce_only,
+            )
         } else {
-            // SELL on SPOT: need the base asset
-            let base_asset = if let Some(pos) = instrument_str.rfind('-') {
-                AssetId::new(&instrument_str[..pos])
+            // SPOT: use original balance check logic
+            let quote_asset = AssetId::new("USDC");
+
+            if order.side == bot_core::OrderSide::Buy {
+                let required = order.price.0 * order.qty.0;
+                let available = simulator.balance(&quote_asset);
+                if required > available {
+                    return Err(format!(
+                        "Insufficient balance: need {} USDC, have {}",
+                        required, available
+                    ));
+                }
             } else {
-                AssetId::new(&instrument_str)
-            };
-
-            let available = simulator.balance(&base_asset);
-
-            if order.qty.0 > available {
-                return Err(format!(
-                    "Insufficient balance: need {} {}, have {}",
-                    order.qty.0, base_asset, available
-                ));
+                let base_asset = if let Some(pos) = instrument_str.rfind('-') {
+                    AssetId::new(&instrument_str[..pos])
+                } else {
+                    AssetId::new(&instrument_str)
+                };
+                let available = simulator.balance(&base_asset);
+                if order.qty.0 > available {
+                    return Err(format!(
+                        "Insufficient balance: need {} {}, have {}",
+                        order.qty.0, base_asset, available
+                    ));
+                }
             }
-        }
 
-        Ok(())
+            Ok(())
+        }
     }
 }
 
@@ -537,8 +557,8 @@ impl<E: Exchange + Send + Sync> Exchange for PaperExchange<E> {
                 order.price
             );
 
-            // Check balance using enhanced perp-aware logic
-            if let Err(reason) = Self::check_balance_for_order(&state.simulator, order) {
+            // Check balance using margin-aware logic
+            if let Err(reason) = Self::check_balance_for_order(&state.simulator, &state.margin_ledger, order) {
                 #[cfg(feature = "wasm")]
                 web_sys::console::log_1(
                     &format!("[WASM Runner] Order REJECTED: {}", reason).into(),
@@ -591,36 +611,30 @@ impl<E: Exchange + Send + Sync> Exchange for PaperExchange<E> {
 
                         let is_perp = instrument_str.ends_with("-PERP");
 
-                        match fill.side {
-                            bot_core::OrderSide::Buy => {
-                                let bal = state.simulator.balance(&quote_asset) - notional;
-                                state.simulator.set_balance(quote_asset, bal);
-                                // Perps are margined in USDC — no base asset transfer
-                                if !is_perp {
+                        if is_perp {
+                            // PERP: use margin ledger for proper accounting
+                            state.margin_ledger.apply_perp_fill(
+                                &fill.instrument,
+                                fill.side,
+                                fill.price.0,
+                                fill.qty.0,
+                                fill.fee.amount,
+                            );
+                        } else {
+                            // SPOT: use original balance update logic
+                            match fill.side {
+                                bot_core::OrderSide::Buy => {
+                                    let bal = state.simulator.balance(&quote_asset) - notional;
+                                    state.simulator.set_balance(quote_asset, bal);
                                     let bal = state.simulator.balance(&base_asset) + fill.qty.0;
                                     state.simulator.set_balance(base_asset, bal);
                                 }
-                            }
-                            bot_core::OrderSide::Sell => {
-                                let bal = state.simulator.balance(&quote_asset) + notional;
-                                state.simulator.set_balance(quote_asset, bal);
-                                if !is_perp {
+                                bot_core::OrderSide::Sell => {
+                                    let bal = state.simulator.balance(&quote_asset) + notional;
+                                    state.simulator.set_balance(quote_asset, bal);
                                     let bal = state.simulator.balance(&base_asset) - fill.qty.0;
                                     state.simulator.set_balance(base_asset, bal);
                                 }
-                            }
-                        }
-
-                        // Track PERP positions for test observability
-                        let inst_str = fill.instrument.to_string();
-                        if inst_str.ends_with("-PERP") {
-                            let pos = state
-                                .perp_positions
-                                .entry(fill.instrument.clone())
-                                .or_default();
-                            match fill.side {
-                                bot_core::OrderSide::Buy => *pos += fill.qty.0,
-                                bot_core::OrderSide::Sell => *pos -= fill.qty.0,
                             }
                         }
                         state.simulated_fills.push(fill.clone());
@@ -780,35 +794,55 @@ impl<E: Exchange + Send + Sync> Exchange for PaperExchange<E> {
         let time_ms = state.time_ms;
         let simulated = state.simulator.check_fills(&quotes_copy, time_ms);
         for sim_fill in simulated {
-            // Track PERP positions for test observability
+            // Apply margin accounting for PERP fills
             let inst_str = sim_fill.fill.instrument.to_string();
             if inst_str.ends_with("-PERP") {
-                let pos = state
-                    .perp_positions
-                    .entry(sim_fill.fill.instrument.clone())
-                    .or_default();
-                match sim_fill.fill.side {
-                    bot_core::OrderSide::Buy => *pos += sim_fill.fill.qty.0,
-                    bot_core::OrderSide::Sell => *pos -= sim_fill.fill.qty.0,
-                }
+                state.margin_ledger.apply_perp_fill(
+                    &sim_fill.fill.instrument,
+                    sim_fill.fill.side,
+                    sim_fill.fill.price.0,
+                    sim_fill.fill.qty.0,
+                    sim_fill.fill.fee.amount,
+                );
             }
             state.simulated_fills.push(sim_fill.fill);
+        }
+
+        // Check for liquidations at current mark prices
+        let marks: HashMap<InstrumentId, Decimal> = state
+            .last_quotes
+            .iter()
+            .map(|(id, q)| (id.clone(), q.mid().0))
+            .collect();
+        let liquidated = state.margin_ledger.check_liquidations(&marks);
+        for instrument in liquidated {
+            if let Some(mark) = marks.get(&instrument) {
+                state.margin_ledger.liquidate(&instrument, *mark);
+            }
         }
 
         Ok(quotes)
     }
 
     async fn poll_account_state(&self) -> Result<AccountState, ExchangeError> {
-        // Return simulated account state based on balances
         let state = self.state.read().await;
 
-        // Calculate account value from USDC balance
-        let usdc_balance = state.simulator.balance(&AssetId::new("USDC"));
+        // Build mark prices from last known quotes
+        let marks: HashMap<InstrumentId, Decimal> = state
+            .last_quotes
+            .iter()
+            .map(|(id, q)| (id.clone(), q.mid().0))
+            .collect();
+
+        // Return real equity including margin positions and unrealized PnL
+        let equity = state.margin_ledger.equity(&marks);
+        let unrealized = state.margin_ledger.total_unrealized_pnl(&marks);
+        let positions = state.margin_ledger.position_snapshots(&marks);
 
         Ok(AccountState {
-            positions: vec![],
-            account_value: Some(usdc_balance),
-            unrealized_pnl: Some(Decimal::ZERO),
+            positions,
+            account_value: Some(equity),
+            unrealized_pnl: Some(unrealized),
         })
     }
 }

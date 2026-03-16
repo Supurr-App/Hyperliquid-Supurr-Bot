@@ -56,3 +56,6 @@ Thumbs.db
 # Debug/test files
 debug_sign.py
 test_hl_order.py
+
+# Releases
+releases/

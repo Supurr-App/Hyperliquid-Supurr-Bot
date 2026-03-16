@@ -1203,11 +1203,18 @@ impl Exchange for HyperliquidClient {
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| Decimal::from_str(s).ok());
 
+                            let liq_px = pos
+                                .get("position")
+                                .and_then(|p| p.get("liquidationPx"))
+                                .and_then(|v| v.as_str())
+                                .and_then(|s| Decimal::from_str(s).ok());
+
                             positions.push(PositionSnapshot {
                                 instrument,
                                 qty,
                                 avg_entry_px: avg_entry,
                                 unrealized_pnl: pos_pnl,
+                                liquidation_px: liq_px,
                             });
                         }
                     }

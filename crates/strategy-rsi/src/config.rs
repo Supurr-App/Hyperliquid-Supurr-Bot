@@ -36,8 +36,16 @@ pub struct RsiStrategyConfig {
     #[serde(default = "default_overbought")]
     pub overbought: f64,
 
-    /// Order size in base asset (e.g. "0.01" = 0.01 ETH)
+    /// Order size in base asset (e.g. "0.01" = 0.01 ETH).
+    /// If `order_notional_quote` is set, this is ignored.
+    #[serde(default)]
     pub order_size: Decimal,
+
+    /// Order size in quote asset (e.g. "100" = $100 worth).
+    /// At each signal, qty = notional / current_price.
+    /// Takes precedence over `order_size` if both are set.
+    #[serde(default)]
+    pub order_notional_quote: Option<Decimal>,
 
     /// Trading side: "long" (buy low, sell high), "short" (sell high, buy low)
     #[serde(default = "default_side")]
@@ -68,8 +76,13 @@ impl RsiStrategyConfig {
         if self.oversold >= self.overbought {
             errors.push("oversold must be less than overbought".into());
         }
-        if self.order_size <= Decimal::ZERO {
-            errors.push("order_size must be > 0".into());
+        let has_base_size = self.order_size > Decimal::ZERO;
+        let has_notional = self.order_notional_quote
+            .map(|n| n > Decimal::ZERO)
+            .unwrap_or(false);
+
+        if !has_base_size && !has_notional {
+            errors.push("Either order_size or order_notional_quote must be > 0".into());
         }
 
         errors

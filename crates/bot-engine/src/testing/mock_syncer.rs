@@ -384,6 +384,7 @@ mod tests {
                 qty: Decimal::new(-1, 1), // -0.1
                 avg_entry_px: Some(bot_core::Price::new(Decimal::new(3000, 0))),
                 unrealized_pnl: Some(Decimal::new(10, 0)),
+                liquidation_px: None,
             }],
             account_value: Some(Decimal::new(50000, 0)),
             unrealized_pnl: Some(Decimal::new(10, 0)),

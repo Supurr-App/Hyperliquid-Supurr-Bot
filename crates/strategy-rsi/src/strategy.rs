@@ -1,5 +1,9 @@
 //! RSI strategy implementation.
 //!
+//! Supports two sizing modes:
+//! - `order_size`: fixed base qty (e.g. 0.01 BTC)
+//! - `order_notional_quote`: fixed quote amount (e.g. $100), qty computed at runtime
+//!
 //! Aggregates quote ticks into OHLCV bars, computes RSI via inline Wilder's
 //! method, and places buy/sell orders when RSI crosses configurable thresholds.
 
@@ -65,6 +69,17 @@ impl RsiStrategy {
         self.market.instrument_id()
     }
 
+    /// Compute order qty: if `order_notional_quote` is set, derive qty from price;
+    /// otherwise use fixed `order_size`.
+    fn compute_order_qty(&self, price: Price) -> Qty {
+        if let Some(notional) = self.config.order_notional_quote {
+            if price.0 > rust_decimal::Decimal::ZERO {
+                return self.round_qty(Qty(notional / price.0));
+            }
+        }
+        self.round_qty(Qty(self.config.order_size))
+    }
+
     fn is_long(&self) -> bool {
         self.config.side.to_lowercase() != "short"
     }
@@ -116,7 +131,7 @@ impl RsiStrategy {
             OrderSide::Buy => self.round_price(ask),
             OrderSide::Sell => self.round_price(bid),
         };
-        let qty = self.round_qty(Qty(self.config.order_size));
+        let qty = self.compute_order_qty(price);
 
         let order = PlaceOrder::limit(self.exchange(), self.instrument(), side, price, qty);
 

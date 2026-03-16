@@ -488,6 +488,7 @@ impl Exchange for MockExchange {
                 qty: pos.qty,
                 avg_entry_px: Some(pos.avg_entry_px),
                 unrealized_pnl: Some(pos.unrealized_pnl),
+                liquidation_px: None,
             })
             .collect();
 
