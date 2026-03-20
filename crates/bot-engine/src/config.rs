@@ -34,10 +34,14 @@ pub struct BotConfig {
     /// Environment: "testnet" or "mainnet"
     pub environment: String,
 
-    /// Private key (hex, with or without 0x prefix)
+    /// Private key (hex, with or without 0x prefix).
+    /// Optional — resolved at runtime from `~/.supurr/credentials.json` if absent.
+    #[serde(default)]
     pub private_key: String,
 
-    /// Wallet address
+    /// Wallet address.
+    /// Optional — resolved at runtime from `~/.supurr/credentials.json` if absent.
+    #[serde(default)]
     pub address: String,
 
     /// Optional vault address
@@ -155,6 +159,52 @@ impl BotConfig {
         Err(anyhow::anyhow!(
             "V2 config format requires a JSON file. Use --config <file>"
         ))
+    }
+
+    /// Resolve wallet credentials: use fields from config if present,
+    /// otherwise fall back to `~/.supurr/credentials.json`.
+    ///
+    /// Returns `(private_key, address)`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn resolve_credentials(&self) -> Result<(String, String)> {
+        if !self.private_key.is_empty() && !self.address.is_empty() {
+            return Ok((self.private_key.clone(), self.address.clone()));
+        }
+
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .context("Cannot determine home directory")?;
+        let creds_path = std::path::PathBuf::from(home).join(".supurr/credentials.json");
+
+        let content = std::fs::read_to_string(&creds_path).with_context(|| {
+            format!(
+                "No credentials in config and ~/.supurr/credentials.json not found. \
+                 Run 'supurr init' to configure your wallet."
+            )
+        })?;
+
+        #[derive(serde::Deserialize)]
+        struct Creds {
+            address: String,
+            private_key: String,
+        }
+
+        let creds: Creds = serde_json::from_str(&content)
+            .context("Failed to parse ~/.supurr/credentials.json")?;
+
+        // Use config values if present, fallback to credentials file
+        let pk = if self.private_key.is_empty() {
+            creds.private_key
+        } else {
+            self.private_key.clone()
+        };
+        let addr = if self.address.is_empty() {
+            creds.address
+        } else {
+            self.address.clone()
+        };
+
+        Ok((pk, addr))
     }
 
     /// Load config from a JSON file

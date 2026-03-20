@@ -317,10 +317,10 @@ impl EngineRunner {
         // Backtest completion detection constant
         const MAX_EMPTY_POLLS: u32 = 3;
 
-        let mut loop_iteration: u32 = 0;
+        let mut _loop_iteration: u32 = 0;
 
         loop {
-            loop_iteration += 1;
+            _loop_iteration += 1;
 
             // Log every iteration in WASM for debugging
             #[cfg(target_arch = "wasm32")]

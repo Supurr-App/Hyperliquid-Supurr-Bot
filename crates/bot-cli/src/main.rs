@@ -180,13 +180,24 @@ async fn main() -> Result<()> {
         .init();
 
     // Load configuration
-    let config = if let Some(path) = config_path {
+    let mut config = if let Some(path) = config_path {
         tracing::info!("Loading config from: {:?}", path);
         BotConfig::from_file(&path)?
     } else {
         tracing::info!("Loading config from environment variables");
         BotConfig::from_env()?
     };
+
+    // Resolve wallet credentials: config fields → ~/.supurr/credentials.json fallback
+    let (resolved_pk, resolved_addr) = config.resolve_credentials()?;
+    if config.private_key.is_empty() || config.address.is_empty() {
+        tracing::info!(
+            "Credentials resolved from ~/.supurr/credentials.json (address={})",
+            &resolved_addr[..8.min(resolved_addr.len())]
+        );
+    }
+    config.private_key = resolved_pk;
+    config.address = resolved_addr;
 
     let environment = config.parse_environment();
     let strategy_type = config.strategy_type.to_lowercase();
@@ -502,9 +513,11 @@ async fn main() -> Result<()> {
     // This would make registration exchange-agnostic and scalable.
     // For now, this Hyperliquid-specific implementation works correctly.
 
-    // Register user for fills tracking ONLY if using Poll mechanism
-    // (Snapshot-based strategies like Arb don't need fill subscriptions)
-    if engine.sync_mechanism() == bot_core::SyncMechanism::Poll {
+    // Register user for fills tracking ONLY in Live mode with Poll mechanism
+    // Paper/Backtest modes don't need real fill subscriptions (avoids HTTP 422 noise)
+    if matches!(trading_mode, TradingMode::Live)
+        && engine.sync_mechanism() == bot_core::SyncMechanism::Poll
+    {
         if let Err(e) = hl_client.register_user().await {
             tracing::warn!(
                 "Failed to register for fills tracking (proxy may not be running): {}",
@@ -513,6 +526,8 @@ async fn main() -> Result<()> {
         } else {
             tracing::info!("Registered for fills tracking (Poll mechanism)");
         }
+    } else if !matches!(trading_mode, TradingMode::Live) {
+        tracing::info!("Skipping fills registration (non-live mode)");
     } else {
         tracing::info!("Skipping fills registration (using Snapshot mechanism)");
     }
@@ -709,8 +724,10 @@ async fn main() -> Result<()> {
     // TODO: Refactor to exchange.on_stop(sync_mechanism) lifecycle hook
     // See on_start() TODO above for full architecture design.
 
-    // Deregister from fills tracking (only if we registered)
-    if sync_mechanism == bot_core::SyncMechanism::Poll {
+    // Deregister from fills tracking (only if we registered — Live + Poll only)
+    if matches!(trading_mode, TradingMode::Live)
+        && sync_mechanism == bot_core::SyncMechanism::Poll
+    {
         if let Err(e) = hl_client.deregister_user().await {
             tracing::warn!("Failed to deregister from fills tracking: {}", e);
         } else {

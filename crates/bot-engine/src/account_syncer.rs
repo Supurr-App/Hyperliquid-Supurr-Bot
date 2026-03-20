@@ -5,7 +5,6 @@
 
 use bot_core::{now_ms, AccountState};
 use reqwest::Client;
-use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
