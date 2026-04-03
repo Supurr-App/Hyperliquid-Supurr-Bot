@@ -658,6 +658,10 @@ impl EngineRunner {
             // Print JSON to stdout on a single line for easy parsing
             if let Ok(json) = serde_json::to_string(&results) {
                 println!("{}", json);
+                // Flush stdout explicitly — large JSON can be truncated if the
+                // process exits before the buffered writer drains to the pipe.
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
             }
         }
 

@@ -211,7 +211,14 @@ async fn main() -> Result<()> {
     );
 
     // Build strategy using shared build_strategy() from bot_engine
-    let strategy_box = build_strategy(&config)?;
+    let strategy_box = match build_strategy(&config) {
+        Ok(strategy) => strategy,
+        Err(e) => {
+            tracing::error!("Strategy configuration validation failed: {}", e);
+            report_init_error(&config, &format!("config_invalid:{}", e)).await;
+            return Err(e.into());
+        }
+    };
 
     // Log strategy info and handle dry-run
     tracing::info!(
