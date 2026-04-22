@@ -9,7 +9,7 @@
 //! For PERPS: Directional - Long (buy DCA, sell TP) or Short (sell DCA, buy TP)
 
 use crate::config::{DCAConfig, DCADirection};
-use crate::state::{DCAOrder, DCAOrderState, DCAPhase, DCAState};
+use crate::state::{DCAOrder, DCAOrderState, DCAPhase, DCAState, PendingTakeProfit};
 
 use bot_core::{
     CancelAll, CancelOrder, ClientOrderId, Event, ExchangeHealth, InstrumentMeta, PlaceOrder,
@@ -137,6 +137,7 @@ impl DCAStrategy {
             self.config.instrument_id(),
         ));
 
+        self.state.clear_take_profit_tracking();
         self.state.phase = DCAPhase::Completed;
     }
 
@@ -206,6 +207,9 @@ impl DCAStrategy {
 
         // Check if it's a TP order
         if self.state.tp_order_id.as_ref() == Some(client_id) {
+            if self.state.tp_cancel_in_flight.as_ref() == Some(client_id) {
+                self.state.tp_cancel_in_flight = None;
+            }
             self.state.tp_order_id = None;
             ctx.log_info("TP order rejected - will retry on next fill");
             return;
@@ -226,7 +230,18 @@ impl DCAStrategy {
     fn handle_order_canceled(&mut self, ctx: &mut dyn StrategyContext, client_id: &ClientOrderId) {
         ctx.log_info(&format!("Order canceled: {}", client_id));
 
-        // TP cancellation is expected when we update it
+        // TP cancellation is expected when we update it.
+        // Place the deferred replacement only after the exchange confirms cancel.
+        if self.state.tp_cancel_in_flight.as_ref() == Some(client_id) {
+            self.state.tp_cancel_in_flight = None;
+            self.state.tp_order_id = None;
+
+            if let Some(replacement) = self.state.pending_tp_replacement.clone() {
+                self.place_take_profit_order(ctx, replacement);
+            }
+            return;
+        }
+
         if self.state.tp_order_id.as_ref() == Some(client_id) {
             self.state.tp_order_id = None;
             return;
@@ -435,12 +450,6 @@ impl DCAStrategy {
 
     /// Update the take profit order (cancel existing, place new).
     fn update_take_profit_order(&mut self, ctx: &mut dyn StrategyContext) {
-        // Cancel existing TP order if present
-        if let Some(old_tp_id) = self.state.tp_order_id.take() {
-            ctx.log_info(&format!("Canceling old TP order: {}", old_tp_id));
-            ctx.cancel_order(CancelOrder::new(self.config.exchange_instance(), old_tp_id));
-        }
-
         // Calculate new TP price
         let Some(tp_price) = self.state.take_profit_price else {
             ctx.log_warn("Cannot place TP: no average entry price yet");
@@ -448,31 +457,63 @@ impl DCAStrategy {
         };
 
         let tp_price = self.round_price(tp_price);
-        let client_id = ClientOrderId::generate();
-        let side = self.state.close_side();
         // Truncate DOWN to lot size to avoid overselling (fee-deducted net qty
         // can have fractional remainder that rounds up past actual holdings)
         let qty = self.trunc_qty(self.state.total_filled_qty);
 
         if qty.0 <= Decimal::ZERO {
             ctx.log_warn("TP qty truncated to zero - skipping");
+            self.state.pending_tp_replacement = None;
             return;
         }
 
+        let replacement = PendingTakeProfit { price: tp_price, qty };
+
+        if let Some(canceling_tp_id) = self.state.tp_cancel_in_flight.clone() {
+            ctx.log_info(&format!(
+                "TP cancel still in flight for {} - deferring replacement",
+                canceling_tp_id
+            ));
+            self.state.pending_tp_replacement = Some(replacement);
+            return;
+        }
+
+        // Cancel existing TP order if present, and wait for cancel ack before replacing it.
+        if let Some(old_tp_id) = self.state.tp_order_id.clone() {
+            ctx.log_info(&format!("Canceling old TP order: {}", old_tp_id));
+            self.state.tp_cancel_in_flight = Some(old_tp_id.clone());
+            self.state.pending_tp_replacement = Some(replacement);
+            ctx.cancel_order(CancelOrder::new(self.config.exchange_instance(), old_tp_id));
+            return;
+        }
+
+        self.place_take_profit_order(ctx, replacement);
+    }
+
+    fn place_take_profit_order(
+        &mut self,
+        ctx: &mut dyn StrategyContext,
+        replacement: PendingTakeProfit,
+    ) {
         let place_order = PlaceOrder::limit(
             self.config.exchange_instance(),
             self.config.instrument_id(),
-            side,
-            tp_price,
-            qty,
+            self.state.close_side(),
+            replacement.price,
+            replacement.qty,
         )
-        .with_client_id(client_id.clone());
+        .with_client_id(ClientOrderId::generate());
+
+        let client_id = place_order.client_id.clone();
+        let side = place_order.side;
 
         ctx.log_info(&format!(
             "Placing TP order: side={} price={} qty={} cloid={}",
-            side, tp_price, qty, client_id
+            side, replacement.price, replacement.qty, client_id
         ));
 
+        self.state.tp_cancel_in_flight = None;
+        self.state.pending_tp_replacement = None;
         self.state.tp_order_id = Some(client_id);
         ctx.place_order(place_order);
     }
@@ -491,6 +532,7 @@ impl DCAStrategy {
             self.config.instrument_id(),
         ));
 
+        self.state.clear_take_profit_tracking();
         // Mark strategy as completed with stop loss reason
         self.state.phase = DCAPhase::Completed;
         self.state.exit_reason = Some("Stop loss triggered".to_string());
@@ -517,7 +559,7 @@ impl DCAStrategy {
         ));
 
         // Clear TP order tracking
-        self.state.tp_order_id = None;
+        self.state.clear_take_profit_tracking();
 
         if self.config.restart_on_complete {
             if self.config.cooldown_period_secs > 0 {
@@ -666,7 +708,161 @@ impl Strategy for DCAStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bot_core::HyperliquidMarket;
+    use bot_core::{
+        AssetId, Balance, Environment, ExchangeHealth, ExchangeId, ExchangeInstance,
+        HyperliquidMarket, InstrumentId, InstrumentKind, InstrumentMeta, LiveOrder, Market,
+        MarketIndex, OrderCanceledEvent, OrderSide, Position, Price, Qty, Quote, Strategy,
+        StrategyContext,
+    };
+    use rust_decimal_macros::dec;
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    #[derive(Default)]
+    struct TestContext {
+        place_orders: Vec<PlaceOrder>,
+        batch_orders: Vec<Vec<PlaceOrder>>,
+        cancel_orders: Vec<CancelOrder>,
+        cancel_alls: Vec<CancelAll>,
+        stop_requests: Vec<(StrategyId, String)>,
+        instruments: HashMap<InstrumentId, InstrumentMeta>,
+        now_ms: i64,
+    }
+
+    impl TestContext {
+        fn with_instrument(meta: InstrumentMeta) -> Self {
+            let mut instruments = HashMap::new();
+            instruments.insert(meta.instrument_id.clone(), meta);
+            Self {
+                instruments,
+                ..Self::default()
+            }
+        }
+
+        fn clear_commands(&mut self) {
+            self.place_orders.clear();
+            self.batch_orders.clear();
+            self.cancel_orders.clear();
+            self.cancel_alls.clear();
+            self.stop_requests.clear();
+        }
+    }
+
+    impl StrategyContext for TestContext {
+        fn place_order(&mut self, cmd: PlaceOrder) {
+            self.place_orders.push(cmd);
+        }
+
+        fn place_orders(&mut self, cmds: Vec<PlaceOrder>) {
+            if !cmds.is_empty() {
+                self.batch_orders.push(cmds);
+            }
+        }
+
+        fn cancel_order(&mut self, cmd: CancelOrder) {
+            self.cancel_orders.push(cmd);
+        }
+
+        fn cancel_all(&mut self, cmd: CancelAll) {
+            self.cancel_alls.push(cmd);
+        }
+
+        fn stop_strategy(&mut self, strategy_id: StrategyId, reason: &str) {
+            self.stop_requests.push((strategy_id, reason.to_string()));
+        }
+
+        fn set_timer(&mut self, _delay: Duration) -> bot_core::TimerId {
+            bot_core::TimerId::new(1)
+        }
+
+        fn set_interval(&mut self, _interval: Duration) -> bot_core::TimerId {
+            bot_core::TimerId::new(1)
+        }
+
+        fn cancel_timer(&mut self, _timer_id: bot_core::TimerId) {}
+
+        fn mid_price(&self, _instrument: &InstrumentId) -> Option<Price> {
+            None
+        }
+
+        fn quote(&self, _instrument: &InstrumentId) -> Option<Quote> {
+            None
+        }
+
+        fn instrument_meta(&self, instrument: &InstrumentId) -> Option<&InstrumentMeta> {
+            self.instruments.get(instrument)
+        }
+
+        fn balance(&self, _asset: &AssetId) -> Balance {
+            Balance::zero()
+        }
+
+        fn position(&self, _instrument: &InstrumentId) -> Position {
+            Position::default()
+        }
+
+        fn exchange_health(&self, _exchange: &ExchangeInstance) -> ExchangeHealth {
+            ExchangeHealth::Active
+        }
+
+        fn order(&self, _client_id: &bot_core::ClientOrderId) -> Option<&LiveOrder> {
+            None
+        }
+
+        fn now_ms(&self) -> i64 {
+            self.now_ms
+        }
+
+        fn log_info(&self, _msg: &str) {}
+
+        fn log_warn(&self, _msg: &str) {}
+
+        fn log_error(&self, _msg: &str) {}
+
+        fn log_debug(&self, _msg: &str) {}
+    }
+
+    fn spot_test_config() -> DCAConfig {
+        DCAConfig {
+            strategy_id: StrategyId::new("test-spot-dca"),
+            environment: Environment::Testnet,
+            market: Market::Hyperliquid(HyperliquidMarket::Spot {
+                base: "HYPE".to_string(),
+                quote: "USDC".to_string(),
+                index: 10107,
+                instrument_meta: None,
+            }),
+            direction: DCADirection::Long,
+            trigger_price: dec!(44.89),
+            base_order_size: dec!(1.04),
+            dca_order_size: dec!(0.61),
+            max_dca_orders: 7,
+            size_multiplier: dec!(1.25),
+            price_deviation_pct: dec!(0.03),
+            deviation_multiplier: dec!(1.0),
+            take_profit_pct: dec!(0.045),
+            stop_loss: None,
+            leverage: dec!(1),
+            max_leverage: dec!(1),
+            restart_on_complete: false,
+            cooldown_period_secs: 60,
+        }
+    }
+
+    fn spot_test_meta() -> InstrumentMeta {
+        InstrumentMeta {
+            instrument_id: InstrumentId::new("HYPE-SPOT"),
+            market_index: MarketIndex::new(10107),
+            base_asset: AssetId::new("HYPE"),
+            quote_asset: AssetId::new("USDC"),
+            tick_size: dec!(0.000001),
+            lot_size: dec!(0.01),
+            min_qty: Some(dec!(0.01)),
+            min_notional: Some(dec!(10)),
+            fee_asset_default: Some(AssetId::new("HYPE")),
+            kind: InstrumentKind::Spot,
+        }
+    }
 
     #[test]
     fn test_strategy_creation() {
@@ -703,5 +899,146 @@ mod tests {
         // Short perp: sell DCA, buy TP
         assert_eq!(strategy.state.open_side(), bot_core::OrderSide::Sell);
         assert_eq!(strategy.state.close_side(), bot_core::OrderSide::Buy);
+    }
+
+    #[test]
+    fn test_tp_replacement_waits_for_cancel_ack() {
+        let config = spot_test_config();
+        let meta = spot_test_meta();
+        let mut strategy = DCAStrategy::new(config.clone());
+        strategy.instrument_meta = Some(meta.clone());
+        strategy.state.take_profit_price = Some(Price::new(dec!(44.872)));
+        strategy.state.total_filled_qty = Qty::new(dec!(6.03727202));
+        strategy.state.tp_order_id = Some(bot_core::ClientOrderId::new("old-tp"));
+
+        let old_tp_id = strategy.state.tp_order_id.clone().unwrap();
+        let mut ctx = TestContext::with_instrument(meta);
+
+        strategy.update_take_profit_order(&mut ctx);
+
+        assert_eq!(ctx.cancel_orders.len(), 1);
+        assert_eq!(ctx.place_orders.len(), 0);
+        assert_eq!(
+            strategy.state.tp_cancel_in_flight.as_ref(),
+            Some(&old_tp_id)
+        );
+        assert!(strategy.state.pending_tp_replacement.is_some());
+        assert_eq!(strategy.state.tp_order_id.as_ref(), Some(&old_tp_id));
+
+        ctx.clear_commands();
+        strategy.on_event(
+            &mut ctx,
+            &Event::OrderCanceled(OrderCanceledEvent {
+                exchange: ExchangeId::new("hyperliquid"),
+                instrument: config.instrument_id(),
+                client_id: old_tp_id.clone(),
+                reason: None,
+                ts: 0,
+            }),
+        );
+
+        assert_eq!(ctx.cancel_orders.len(), 0);
+        assert_eq!(ctx.place_orders.len(), 1);
+        assert!(strategy.state.tp_cancel_in_flight.is_none());
+        assert!(strategy.state.pending_tp_replacement.is_none());
+        assert!(strategy.state.tp_order_id.is_some());
+        assert_ne!(strategy.state.tp_order_id.as_ref(), Some(&old_tp_id));
+
+        let replacement = &ctx.place_orders[0];
+        assert_eq!(replacement.side, OrderSide::Sell);
+        assert_eq!(replacement.qty, Qty::new(dec!(6.03)));
+        assert_eq!(replacement.price, Price::new(dec!(44.872)));
+    }
+
+    #[test]
+    fn test_tp_replacement_updates_latest_spec_while_cancel_in_flight() {
+        let config = spot_test_config();
+        let meta = spot_test_meta();
+        let mut strategy = DCAStrategy::new(config.clone());
+        strategy.instrument_meta = Some(meta.clone());
+        strategy.state.take_profit_price = Some(Price::new(dec!(44.881)));
+        strategy.state.total_filled_qty = Qty::new(dec!(4.54788303));
+        strategy.state.tp_order_id = Some(bot_core::ClientOrderId::new("old-tp"));
+
+        let old_tp_id = strategy.state.tp_order_id.clone().unwrap();
+        let mut ctx = TestContext::with_instrument(meta);
+
+        strategy.update_take_profit_order(&mut ctx);
+        assert_eq!(ctx.cancel_orders.len(), 1);
+        assert!(strategy.state.pending_tp_replacement.is_some());
+
+        ctx.clear_commands();
+        strategy.state.take_profit_price = Some(Price::new(dec!(44.872)));
+        strategy.state.total_filled_qty = Qty::new(dec!(6.03727202));
+        strategy.update_take_profit_order(&mut ctx);
+
+        assert_eq!(ctx.cancel_orders.len(), 0);
+        assert_eq!(ctx.place_orders.len(), 0);
+        let pending = strategy.state.pending_tp_replacement.as_ref().unwrap();
+        assert_eq!(pending.price, Price::new(dec!(44.872)));
+        assert_eq!(pending.qty, Qty::new(dec!(6.03)));
+
+        strategy.on_event(
+            &mut ctx,
+            &Event::OrderCanceled(OrderCanceledEvent {
+                exchange: ExchangeId::new("hyperliquid"),
+                instrument: config.instrument_id(),
+                client_id: old_tp_id,
+                reason: None,
+                ts: 0,
+            }),
+        );
+
+        assert_eq!(ctx.place_orders.len(), 1);
+        let replacement = &ctx.place_orders[0];
+        assert_eq!(replacement.price, Price::new(dec!(44.872)));
+        assert_eq!(replacement.qty, Qty::new(dec!(6.03)));
+    }
+
+    #[test]
+    fn test_tp_fill_clears_deferred_replacement_state() {
+        let config = spot_test_config();
+        let meta = spot_test_meta();
+        let mut strategy = DCAStrategy::new(config.clone());
+        strategy.instrument_meta = Some(meta.clone());
+        strategy.state.take_profit_price = Some(Price::new(dec!(44.872)));
+        strategy.state.total_filled_qty = Qty::new(dec!(6.03727202));
+        strategy.state.tp_order_id = Some(bot_core::ClientOrderId::new("old-tp"));
+
+        let old_tp_id = strategy.state.tp_order_id.clone().unwrap();
+        let mut ctx = TestContext::with_instrument(meta);
+
+        strategy.update_take_profit_order(&mut ctx);
+        assert!(strategy.state.tp_cancel_in_flight.is_some());
+        assert!(strategy.state.pending_tp_replacement.is_some());
+
+        ctx.clear_commands();
+        strategy.handle_order_filled(
+            &mut ctx,
+            &old_tp_id,
+            Qty::new(dec!(6.03)),
+            Price::new(dec!(44.872)),
+            true,
+        );
+
+        assert!(strategy.state.tp_order_id.is_none());
+        assert!(strategy.state.tp_cancel_in_flight.is_none());
+        assert!(strategy.state.pending_tp_replacement.is_none());
+        assert_eq!(ctx.cancel_alls.len(), 1);
+        assert_eq!(ctx.stop_requests.len(), 1);
+
+        ctx.clear_commands();
+        strategy.on_event(
+            &mut ctx,
+            &Event::OrderCanceled(OrderCanceledEvent {
+                exchange: ExchangeId::new("hyperliquid"),
+                instrument: config.instrument_id(),
+                client_id: old_tp_id,
+                reason: None,
+                ts: 0,
+            }),
+        );
+
+        assert_eq!(ctx.place_orders.len(), 0);
     }
 }

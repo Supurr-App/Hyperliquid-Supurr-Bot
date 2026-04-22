@@ -118,6 +118,13 @@ impl DCAOrder {
     }
 }
 
+/// Deferred TP replacement to place after the previous TP is canceled.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingTakeProfit {
+    pub price: Price,
+    pub qty: Qty,
+}
+
 /// Full DCA strategy state.
 #[derive(Debug, Clone)]
 pub struct DCAState {
@@ -172,6 +179,12 @@ pub struct DCAState {
     /// Client order ID for current take profit order
     pub tp_order_id: Option<ClientOrderId>,
 
+    /// TP order ID that has a cancel request in flight.
+    pub tp_cancel_in_flight: Option<ClientOrderId>,
+
+    /// Latest TP replacement spec waiting for cancel acknowledgment.
+    pub pending_tp_replacement: Option<PendingTakeProfit>,
+
     /// Client order ID for stop loss order (if triggered)
     pub sl_order_id: Option<ClientOrderId>,
 
@@ -210,6 +223,8 @@ impl DCAState {
 
             order_registry: HashMap::new(),
             tp_order_id: None,
+            tp_cancel_in_flight: None,
+            pending_tp_replacement: None,
             sl_order_id: None,
 
             exit_reason: None,
@@ -358,6 +373,13 @@ impl DCAState {
         self.orders.iter().all(|o| o.state == DCAOrderState::Filled)
     }
 
+    /// Clear all TP order tracking, including deferred replacement state.
+    pub fn clear_take_profit_tracking(&mut self) {
+        self.tp_order_id = None;
+        self.tp_cancel_in_flight = None;
+        self.pending_tp_replacement = None;
+    }
+
     /// Reset state for a new cycle.
     pub fn reset_for_new_cycle(&mut self) {
         self.phase = DCAPhase::PlacingOrders;
@@ -366,7 +388,7 @@ impl DCAState {
         self.average_entry_price = None;
         self.take_profit_price = None;
         self.order_registry.clear();
-        self.tp_order_id = None;
+        self.clear_take_profit_tracking();
         self.sl_order_id = None;
 
         for order in &mut self.orders {

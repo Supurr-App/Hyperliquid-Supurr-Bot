@@ -21,14 +21,14 @@ CLI (supurr_cli)      ─┘       │                              │
 
 | Component     | Path                                                                                |
 | ------------- | ----------------------------------------------------------------------------------- |
-| Bot engine    | `/Users/amitsharma/Desktop/work/botfromscratch/bot/crates/bot-cli`                  |
-| Strategies    | `/Users/amitsharma/Desktop/work/botfromscratch/bot/crates/strategy-{grid,arb,dca}`  |
-| Bot API (v2)  | `/Users/amitsharma/Desktop/work/botfromscratch/bot_api/src/routes/bots.ts`          |
-| API Logger    | `/Users/amitsharma/Desktop/work/botfromscratch/bot_api/src/services/logger.ts`      |
-| API Telemetry | `/Users/amitsharma/Desktop/work/botfromscratch/bot_api/src/middleware/telemetry.ts` |
+| Bot engine    | `/Users/amitsharma/Desktop/work/botfromscratch/ai-agent/bot/crates/bot-cli`                  |
+| Strategies    | `/Users/amitsharma/Desktop/work/botfromscratch/ai-agent/bot/crates/strategy-{grid,arb,dca}`  |
+| Bot API (v2)  | `/Users/amitsharma/Desktop/work/botfromscratch/ai-agent/bot_api/src/routes/bots.ts`          |
+| API Logger    | `/Users/amitsharma/Desktop/work/botfromscratch/ai-agent/bot_api/src/services/logger.ts`      |
+| API Telemetry | `/Users/amitsharma/Desktop/work/botfromscratch/ai-agent/bot_api/src/middleware/telemetry.ts` |
 | Legacy API    | `/Users/amitsharma/Desktop/work/algobot/algobot/botRoutes.py`                       |
-| Frontend      | `/Users/amitsharma/Desktop/work/Instant-Trading-Backend/Buffer-UI`                  |
-| CLI           | `/Users/amitsharma/Desktop/work/botfromscratch/supurr_cli`                          |
+| Frontend      | `/Users/amitsharma/Desktop/work/botfromscratch/ai-agent/Buffer-UI`                  |
+| CLI           | `/Users/amitsharma/Desktop/work/botfromscratch/ai-agent/supurr_cli`                 |
 
 ---
 
