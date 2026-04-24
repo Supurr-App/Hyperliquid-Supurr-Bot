@@ -15,6 +15,20 @@ use tokio::sync::RwLock;
 use crate::signing::{decimal_to_wire, timestamp_ms, HyperliquidSigner};
 use crate::types::{Hip3Config, HyperliquidConfig, OutcomeConfig};
 
+const ADDRESS_LIMIT_REFILL_MS_PER_ACTION: u64 = 10_000;
+const ADDRESS_LIMIT_RETRY_BUFFER_MS: u64 = 500;
+
+fn retry_after_for_action_units(action_units: u32) -> u64 {
+    ADDRESS_LIMIT_REFILL_MS_PER_ACTION
+        .saturating_mul(action_units.max(1) as u64)
+        .saturating_add(ADDRESS_LIMIT_RETRY_BUFFER_MS)
+}
+
+fn is_cumulative_address_limit_error(reason: &str) -> bool {
+    let reason = reason.to_ascii_lowercase();
+    reason.contains("too many cumulative requests") || reason.contains("cumulative requests sent")
+}
+
 /// Response types from Hyperliquid API (info endpoints)
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct HyperliquidUserFill {
@@ -230,6 +244,7 @@ impl HyperliquidClient {
     async fn exchange_request(
         &self,
         action: serde_json::Value,
+        action_units: u32,
     ) -> Result<serde_json::Value, ExchangeError> {
         let url = format!("{}/exchange", self.base_url());
         let nonce = timestamp_ms();
@@ -298,13 +313,19 @@ impl HyperliquidClient {
             return Err(ExchangeError::Http(format!("HTTP {}: {}", status, text)));
         }
 
-        serde_json::from_str::<serde_json::Value>(&text).map_err(|e| {
+        let value = serde_json::from_str::<serde_json::Value>(&text).map_err(|e| {
             ExchangeError::Parse(format!(
                 "{} | raw={}",
                 e,
                 text.chars().take(2_000).collect::<String>()
             ))
-        })
+        })?;
+
+        if let Some(error) = Self::address_limit_error(&value, action_units) {
+            return Err(error);
+        }
+
+        Ok(value)
     }
 
     fn exchange_status(resp: &serde_json::Value) -> Option<&str> {
@@ -331,6 +352,23 @@ impl HyperliquidClient {
             }
         }
         serde_json::to_string(resp).unwrap_or_else(|_| format!("{:?}", resp))
+    }
+
+    fn address_limit_error(resp: &serde_json::Value, action_units: u32) -> Option<ExchangeError> {
+        if Self::exchange_status(resp) == Some("ok") {
+            return None;
+        }
+
+        let reason = Self::exchange_reject_reason(resp);
+        if !is_cumulative_address_limit_error(&reason) {
+            return None;
+        }
+
+        let needed = action_units.max(1);
+        Some(ExchangeError::WouldExceedUserActionLimit {
+            retry_after_ms: retry_after_for_action_units(needed),
+            needed,
+        })
     }
 
     fn extract_order_statuses(resp: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
@@ -709,7 +747,7 @@ impl HyperliquidClient {
             }]
         });
 
-        let response = self.exchange_request(action).await?;
+        let response = self.exchange_request(action, 1).await?;
 
         match Self::exchange_status(&response) {
             Some("ok") => Ok(()),
@@ -737,7 +775,7 @@ impl HyperliquidClient {
             }]
         });
 
-        let response = self.exchange_request(action).await?;
+        let response = self.exchange_request(action, 1).await?;
 
         match Self::exchange_status(&response) {
             Some("ok") => Ok(()),
@@ -786,7 +824,7 @@ impl HyperliquidClient {
             is_cross
         );
 
-        let response = self.exchange_request(action).await?;
+        let response = self.exchange_request(action, 1).await?;
 
         match Self::exchange_status(&response) {
             Some("ok") => {
@@ -909,24 +947,46 @@ impl Exchange for HyperliquidClient {
             serde_json::to_string(&order_wires).unwrap_or_default()
         );
 
-        let response = self.exchange_request(action).await?;
+        let response = self.exchange_request(action, orders.len() as u32).await?;
 
         match Self::exchange_status(&response) {
             Some("ok") => {
                 // Parse results for each order from the response
                 // Expected shape: {"status":"ok","response":{"type":"order","data":{"statuses":[...]}}}
-                let statuses = Self::extract_order_statuses(&response);
-                if statuses.is_none() {
-                    return Err(ExchangeError::Rejected(format!(
-                        "Order response missing statuses: {}",
-                        Self::exchange_reject_reason(&response)
-                    )));
+                let statuses = match Self::extract_order_statuses(&response) {
+                    Some(statuses) => statuses,
+                    None => {
+                        return Err(ExchangeError::Rejected(format!(
+                            "Order response missing statuses: {}",
+                            Self::exchange_reject_reason(&response)
+                        )));
+                    }
+                };
+
+                let has_address_limit_error = statuses.iter().any(|status| {
+                    status
+                        .get("error")
+                        .and_then(|error| error.as_str())
+                        .map(is_cumulative_address_limit_error)
+                        .unwrap_or(false)
+                });
+                let all_order_statuses_are_errors = statuses
+                    .iter()
+                    .take(orders.len())
+                    .all(|status| status.get("error").is_some());
+
+                if has_address_limit_error && all_order_statuses_are_errors {
+                    let needed = orders.len().max(1) as u32;
+                    return Err(ExchangeError::WouldExceedUserActionLimit {
+                        retry_after_ms: retry_after_for_action_units(needed),
+                        needed,
+                    });
                 }
 
                 let mut results = Vec::with_capacity(orders.len());
 
                 for (i, order) in orders.iter().enumerate() {
-                    let status = statuses.and_then(|s| s.get(i));
+                    let status = statuses.get(i);
 
                     // Check for error in this order's status
                     let error = status
@@ -1073,7 +1133,7 @@ impl Exchange for HyperliquidClient {
             "cancels": cancels
         });
 
-        let response = self.exchange_request(action).await?;
+        let response = self.exchange_request(action, num_orders).await?;
 
         match Self::exchange_status(&response) {
             Some("ok") => {
@@ -1271,4 +1331,44 @@ pub fn new_client_with_registration(
     let client = std::sync::Arc::new(HyperliquidClient::new(config)?);
     let exchange: std::sync::Arc<dyn Exchange> = client.clone();
     Ok((exchange, client))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cumulative_address_limit_error_maps_to_deferred_retry() {
+        let response = serde_json::json!({
+            "status": "err",
+            "response": "Too many cumulative requests sent. Rate limited."
+        });
+
+        let error = HyperliquidClient::address_limit_error(&response, 10);
+
+        assert!(matches!(
+            error,
+            Some(ExchangeError::WouldExceedUserActionLimit {
+                retry_after_ms: 100_500,
+                needed: 10
+            })
+        ));
+    }
+
+    #[test]
+    fn non_limit_exchange_error_is_not_reclassified() {
+        let response = serde_json::json!({
+            "status": "err",
+            "response": "Insufficient margin"
+        });
+
+        assert!(HyperliquidClient::address_limit_error(&response, 1).is_none());
+    }
+
+    #[test]
+    fn retry_delay_uses_one_action_minimum() {
+        assert_eq!(retry_after_for_action_units(0), 10_500);
+        assert_eq!(retry_after_for_action_units(1), 10_500);
+        assert_eq!(retry_after_for_action_units(3), 30_500);
+    }
 }

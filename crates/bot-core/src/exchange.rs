@@ -31,6 +31,9 @@ pub enum ExchangeError {
     #[error("Rate limited (429)")]
     RateLimited,
 
+    #[error("Would exceed user action limit (needed {needed}, retry after {retry_after_ms}ms)")]
+    WouldExceedUserActionLimit { retry_after_ms: u64, needed: u32 },
+
     #[error("Exchange unavailable (502/503)")]
     Unavailable,
 
@@ -58,7 +61,11 @@ impl ExchangeError {
     pub fn is_transient(&self) -> bool {
         matches!(
             self,
-            Self::RateLimited | Self::Unavailable | Self::Timeout | Self::Network(_)
+            Self::RateLimited
+                | Self::WouldExceedUserActionLimit { .. }
+                | Self::Unavailable
+                | Self::Timeout
+                | Self::Network(_)
         )
     }
 

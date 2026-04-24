@@ -10,14 +10,14 @@
 use crate::compat::sleep;
 use crate::poll_guard::{PollGuard, PollOutcome};
 use bot_core::{
-    CancelAll, CancelOrder, ClientOrderId, Command, Event, Exchange, ExchangeHealth,
+    CancelAll, CancelOrder, ClientOrderId, Command, Event, Exchange, ExchangeError, ExchangeHealth,
     ExchangeInstance, Fill, InstrumentId, OrderAcceptedEvent, OrderCanceledEvent,
     OrderCompletedEvent, OrderFilledEvent, OrderInput, OrderRejectedEvent, PlaceOrder,
     PlaceOrderResult, Qty, Quote, QuoteEvent,
 };
 use futures::channel::mpsc;
 use rust_decimal::Decimal;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,6 +30,15 @@ use crate::trade_syncer::{TradeSyncer, TradeSyncerConfig};
 use crate::Engine;
 
 use serde::Serialize;
+
+const MAX_DEFERRED_ACTION_LIMIT_COMMANDS: usize = 1024;
+const MAX_DEFERRED_ACTION_LIMIT_PER_LOOP: usize = 4;
+
+#[derive(Debug, Clone)]
+struct DeferredActionLimitCommand {
+    retry_at_ms: i64,
+    command: Command,
+}
 
 /// Individual fill record for backtest results (serialized to frontend)
 #[derive(Debug, Clone, Serialize)]
@@ -150,6 +159,8 @@ pub struct EngineRunner {
     fills_guard: PollGuard,
     /// Poll guard for quotes (per-exchange backoff + error classification)
     quotes_guard: PollGuard,
+    /// Commands delayed by Hyperliquid address-based cumulative action limits.
+    deferred_action_limit_commands: VecDeque<DeferredActionLimitCommand>,
 }
 
 impl EngineRunner {
@@ -175,6 +186,7 @@ impl EngineRunner {
             stats: TradingStats::default(),
             fills_guard,
             quotes_guard,
+            deferred_action_limit_commands: VecDeque::new(),
         }
     }
 
@@ -343,6 +355,8 @@ impl EngineRunner {
                 }
                 Err(_) => {} // Channel empty
             }
+
+            self.process_deferred_action_limit_commands().await;
 
             // Snapshot exchanges for thread safety
             let exchanges_snapshot: Vec<(ExchangeInstance, Arc<dyn Exchange>)> = self
@@ -683,6 +697,121 @@ impl EngineRunner {
         }
     }
 
+    fn action_limit_retry_after(error: &ExchangeError) -> Option<u64> {
+        match error {
+            ExchangeError::WouldExceedUserActionLimit { retry_after_ms, .. } => {
+                Some(*retry_after_ms)
+            }
+            _ => None,
+        }
+    }
+
+    fn is_cancel_command(command: &Command) -> bool {
+        matches!(command, Command::CancelOrder(_) | Command::CancelAll(_))
+    }
+
+    fn same_cancel_command(left: &Command, right: &Command) -> bool {
+        match (left, right) {
+            (Command::CancelOrder(a), Command::CancelOrder(b)) => {
+                a.exchange == b.exchange && a.client_id == b.client_id
+            }
+            (Command::CancelAll(a), Command::CancelAll(b)) => {
+                a.exchange == b.exchange && a.instrument == b.instrument
+            }
+            _ => false,
+        }
+    }
+
+    fn defer_action_limit_command(&mut self, command: Command, retry_after_ms: u64) {
+        let retry_at_ms = bot_core::now_ms() + retry_after_ms as i64;
+
+        if Self::is_cancel_command(&command) {
+            if let Some(existing) = self
+                .deferred_action_limit_commands
+                .iter_mut()
+                .find(|existing| Self::same_cancel_command(&existing.command, &command))
+            {
+                existing.retry_at_ms = existing.retry_at_ms.min(retry_at_ms);
+                tracing::debug!(
+                    "Coalesced duplicate Hyperliquid action-limit cancel command: {:?}",
+                    command
+                );
+                return;
+            }
+        }
+
+        if self.deferred_action_limit_commands.len() >= MAX_DEFERRED_ACTION_LIMIT_COMMANDS {
+            tracing::error!(
+                "Action-limit deferred queue full ({} commands); stopping runner",
+                self.deferred_action_limit_commands.len()
+            );
+            self.shutdown_reason = Some("action_limit_deferred_queue_full".to_string());
+            self.should_shutdown = true;
+            return;
+        }
+
+        tracing::warn!(
+            "Deferring command for Hyperliquid action limit: retry_after_ms={} command={:?}",
+            retry_after_ms,
+            command
+        );
+        self.deferred_action_limit_commands
+            .push_back(DeferredActionLimitCommand {
+                retry_at_ms,
+                command,
+            });
+    }
+
+    fn next_deferred_action_limit_index(&self, now: i64) -> Option<usize> {
+        let mut selected: Option<(usize, bool, i64)> = None;
+
+        for (index, deferred) in self.deferred_action_limit_commands.iter().enumerate() {
+            if deferred.retry_at_ms > now {
+                continue;
+            }
+
+            let is_cancel = Self::is_cancel_command(&deferred.command);
+            match selected {
+                None => selected = Some((index, is_cancel, deferred.retry_at_ms)),
+                Some((_, selected_is_cancel, selected_retry_at_ms))
+                    if (is_cancel && !selected_is_cancel)
+                        || (is_cancel == selected_is_cancel
+                            && deferred.retry_at_ms < selected_retry_at_ms) =>
+                {
+                    selected = Some((index, is_cancel, deferred.retry_at_ms));
+                }
+                _ => {}
+            }
+        }
+
+        selected.map(|(index, _, _)| index)
+    }
+
+    async fn process_deferred_action_limit_commands(&mut self) {
+        let now = bot_core::now_ms();
+        let mut processed = 0usize;
+
+        while processed < MAX_DEFERRED_ACTION_LIMIT_PER_LOOP {
+            let Some(index) = self.next_deferred_action_limit_index(now) else {
+                break;
+            };
+
+            let deferred = self
+                .deferred_action_limit_commands
+                .remove(index)
+                .expect("index selected from queue");
+            tracing::info!(
+                "Retrying Hyperliquid action-limit deferred command: {:?}",
+                deferred.command
+            );
+            let followups = self.execute_commands(vec![deferred.command]).await;
+            for event in followups {
+                self.handle_event(event).await;
+            }
+            processed += 1;
+        }
+    }
+
     fn resolve_fill_client_id(&self, fill: &Fill) -> Option<ClientOrderId> {
         if let Some(cid) = fill.client_id.clone() {
             return Some(cid);
@@ -975,6 +1104,11 @@ impl EngineRunner {
                 }
             }
             Err(e) => {
+                if let Some(retry_after_ms) = Self::action_limit_retry_after(&e) {
+                    self.defer_action_limit_command(Command::PlaceOrder(cmd), retry_after_ms);
+                    return vec![];
+                }
+
                 self.engine.order_manager_mut().reject_order(&cmd.client_id);
                 vec![Event::OrderRejected(OrderRejectedEvent {
                     exchange: cmd.exchange.exchange_id.clone(),
@@ -1154,6 +1288,23 @@ impl EngineRunner {
                 }
             }
             Err(e) => {
+                if let Some(retry_after_ms) = Self::action_limit_retry_after(&e) {
+                    let deferred_orders: Vec<PlaceOrder> = cmd_metadata
+                        .iter()
+                        .filter(|(_, valid)| *valid)
+                        .map(|(cmd, _)| cmd.clone())
+                        .collect();
+
+                    if !deferred_orders.is_empty() {
+                        self.defer_action_limit_command(
+                            Command::PlaceOrders(deferred_orders),
+                            retry_after_ms,
+                        );
+                    }
+
+                    return events;
+                }
+
                 // Reject all valid orders on error
                 for (cmd, valid) in &cmd_metadata {
                     if *valid {
@@ -1213,6 +1364,11 @@ impl EngineRunner {
                 }))
             }
             Err(e) => {
+                if let Some(retry_after_ms) = Self::action_limit_retry_after(&e) {
+                    self.defer_action_limit_command(Command::CancelOrder(cmd), retry_after_ms);
+                    return None;
+                }
+
                 tracing::warn!("CancelOrder failed for {}: {}", cmd.client_id, e);
                 None
             }
@@ -1259,6 +1415,14 @@ impl EngineRunner {
                     );
                 }
                 Err(e) => {
+                    if let Some(retry_after_ms) = Self::action_limit_retry_after(&e) {
+                        self.defer_action_limit_command(
+                            Command::CancelAll(cmd.clone()),
+                            retry_after_ms,
+                        );
+                        return out;
+                    }
+
                     tracing::warn!("CancelAll failed for {}: {}", instrument, e);
                 }
             }
@@ -1315,4 +1479,166 @@ pub fn spawn_runner_with_syncer(
     });
 
     (handle, shutdown_handle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::MockExchange;
+    use crate::EngineConfig;
+    use bot_core::{
+        AssetId, Environment, ExchangeId, InstrumentKind, InstrumentMeta, MarketIndex, OrderSide,
+        Price, Strategy, StrategyContext, StrategyId, TimeInForce,
+    };
+    use rust_decimal::Decimal;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::time::timeout;
+
+    struct DeferredPlacementProbeStrategy {
+        id: StrategyId,
+        exchange: ExchangeInstance,
+        instrument: InstrumentId,
+        accepted: Arc<AtomicUsize>,
+        rejected: Arc<AtomicUsize>,
+        single_sent: bool,
+    }
+
+    impl DeferredPlacementProbeStrategy {
+        fn new(
+            exchange: ExchangeInstance,
+            instrument: InstrumentId,
+            accepted: Arc<AtomicUsize>,
+            rejected: Arc<AtomicUsize>,
+        ) -> Self {
+            Self {
+                id: StrategyId::new("deferred-placement-probe"),
+                exchange,
+                instrument,
+                accepted,
+                rejected,
+                single_sent: false,
+            }
+        }
+
+        fn order(&self, client_id: &str) -> PlaceOrder {
+            PlaceOrder {
+                client_id: ClientOrderId::new(client_id),
+                exchange: self.exchange.clone(),
+                instrument: self.instrument.clone(),
+                side: OrderSide::Buy,
+                price: Price::new(Decimal::new(100, 0)),
+                qty: Qty::new(Decimal::new(1, 0)),
+                tif: TimeInForce::Gtc,
+                post_only: false,
+                reduce_only: false,
+            }
+        }
+    }
+
+    impl Strategy for DeferredPlacementProbeStrategy {
+        fn id(&self) -> &StrategyId {
+            &self.id
+        }
+
+        fn on_start(&mut self, ctx: &mut dyn StrategyContext) {
+            ctx.place_orders(vec![self.order("batch-1"), self.order("batch-2")]);
+        }
+
+        fn on_event(&mut self, ctx: &mut dyn StrategyContext, event: &Event) {
+            match event {
+                Event::OrderAccepted(_) => {
+                    let accepted = self.accepted.fetch_add(1, Ordering::SeqCst) + 1;
+                    if accepted == 2 && !self.single_sent {
+                        self.single_sent = true;
+                        ctx.place_order(self.order("later-single"));
+                    }
+                    if accepted >= 3 {
+                        ctx.stop_strategy(self.id.clone(), "probe complete");
+                    }
+                }
+                Event::OrderRejected(_) => {
+                    self.rejected.fetch_add(1, Ordering::SeqCst);
+                }
+                _ => {}
+            }
+        }
+
+        fn on_timer(&mut self, _ctx: &mut dyn StrategyContext, _timer_id: bot_core::TimerId) {}
+
+        fn on_stop(&mut self, _ctx: &mut dyn StrategyContext) {}
+    }
+
+    fn action_limit_error(needed: u32) -> ExchangeError {
+        ExchangeError::WouldExceedUserActionLimit {
+            retry_after_ms: 1,
+            needed,
+        }
+    }
+
+    fn instrument_meta(instrument: &InstrumentId) -> InstrumentMeta {
+        InstrumentMeta {
+            instrument_id: instrument.clone(),
+            market_index: MarketIndex::new(0),
+            base_asset: AssetId::new("BTC"),
+            quote_asset: AssetId::new("USDC"),
+            tick_size: Decimal::new(1, 0),
+            lot_size: Decimal::new(1, 0),
+            min_qty: None,
+            min_notional: None,
+            fee_asset_default: Some(AssetId::new("USDC")),
+            kind: InstrumentKind::Perp,
+        }
+    }
+
+    #[tokio::test]
+    async fn action_limit_defers_batch_and_later_single_without_rejection() {
+        let exchange_instance =
+            ExchangeInstance::new(ExchangeId::new("hyperliquid"), Environment::Testnet);
+        let instrument = InstrumentId::new("BTC-PERP");
+        let mock = Arc::new(MockExchange::new());
+
+        mock.queue_place_order_error(action_limit_error(2)).await;
+        mock.queue_place_order_success().await;
+        mock.queue_place_order_error(action_limit_error(1)).await;
+        mock.queue_place_order_success().await;
+
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let rejected = Arc::new(AtomicUsize::new(0));
+        let strategy = Box::new(DeferredPlacementProbeStrategy::new(
+            exchange_instance,
+            instrument.clone(),
+            accepted.clone(),
+            rejected.clone(),
+        ));
+
+        let mut engine = Engine::new(EngineConfig::default());
+        engine.register_strategy(strategy);
+        engine.register_instrument(instrument_meta(&instrument));
+        engine.register_exchange(mock.clone() as Arc<dyn Exchange>);
+
+        let mut runner = EngineRunner::new(
+            engine,
+            RunnerConfig {
+                min_poll_delay_ms: 1,
+                quote_poll_interval_ms: 1,
+                cleanup_delay_ms: 0,
+                ..Default::default()
+            },
+        );
+        runner.add_exchange(mock.clone() as Arc<dyn Exchange>);
+        runner.add_instrument(instrument);
+
+        timeout(Duration::from_secs(2), runner.run())
+            .await
+            .expect("runner should complete after deferred retries");
+
+        assert_eq!(accepted.load(Ordering::SeqCst), 3);
+        assert_eq!(rejected.load(Ordering::SeqCst), 0);
+
+        let placed = mock.placed_orders().await;
+        assert_eq!(placed.len(), 3);
+        assert_eq!(placed[0].client_id, ClientOrderId::new("batch-1"));
+        assert_eq!(placed[1].client_id, ClientOrderId::new("batch-2"));
+        assert_eq!(placed[2].client_id, ClientOrderId::new("later-single"));
+    }
 }

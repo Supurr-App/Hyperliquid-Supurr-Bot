@@ -84,6 +84,7 @@ struct MockState {
 
     // Event recording
     placed_orders: Vec<OrderInput>,
+    queued_place_order_outcomes: VecDeque<Result<(), ExchangeError>>,
 
     // Behavioral controls
     knobs: MockKnobs,
@@ -212,6 +213,7 @@ impl MockExchange {
                 next_oid: 1000,
                 fills: Vec::new(),
                 placed_orders: Vec::new(),
+                queued_place_order_outcomes: VecDeque::new(),
                 knobs: MockKnobs::default(),
                 time_ms: 0,
                 quote_queue: VecDeque::new(),
@@ -240,6 +242,22 @@ impl MockExchange {
 
     pub async fn set_should_timeout(&self, should_timeout: bool) {
         self.inner.write().await.knobs.should_timeout = should_timeout;
+    }
+
+    pub async fn queue_place_order_error(&self, error: ExchangeError) {
+        self.inner
+            .write()
+            .await
+            .queued_place_order_outcomes
+            .push_back(Err(error));
+    }
+
+    pub async fn queue_place_order_success(&self) {
+        self.inner
+            .write()
+            .await
+            .queued_place_order_outcomes
+            .push_back(Ok(()));
     }
 
     /// Enable immediate fill mode for all orders (for backtesting)
@@ -319,6 +337,10 @@ impl Exchange for MockExchange {
         orders: &[OrderInput],
     ) -> Result<Vec<PlaceOrderResult>, ExchangeError> {
         let mut state = self.inner.write().await;
+
+        if let Some(outcome) = state.queued_place_order_outcomes.pop_front() {
+            outcome?;
+        }
 
         // Record for verification
         state.placed_orders.extend_from_slice(orders);
