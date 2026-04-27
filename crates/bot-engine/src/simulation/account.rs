@@ -87,12 +87,10 @@ impl IsolatedPosition {
             return None;
         }
 
-        let margin_available = self.isolated_margin_reserved
-            - self.qty.abs() * self.avg_entry_px * mmr;
+        let margin_available =
+            self.isolated_margin_reserved - self.qty.abs() * self.avg_entry_px * mmr;
 
-        Some(
-            self.avg_entry_px - side_val * margin_available / self.qty.abs() / denominator,
-        )
+        Some(self.avg_entry_px - side_val * margin_available / self.qty.abs() / denominator)
     }
 
     /// Required initial margin for a new order at given notional and leverage.
@@ -135,8 +133,8 @@ impl IsolatedPosition {
             return false;
         }
         match order_side {
-            OrderSide::Buy => self.qty < Decimal::ZERO,  // buying reduces a short
-            OrderSide::Sell => self.qty > Decimal::ZERO,  // selling reduces a long
+            OrderSide::Buy => self.qty < Decimal::ZERO, // buying reduces a short
+            OrderSide::Sell => self.qty > Decimal::ZERO, // selling reduces a long
         }
     }
 }
@@ -514,10 +512,7 @@ impl MarginLedger {
 
     /// Check all positions for liquidation at current mark prices.
     /// Returns list of instruments that should be liquidated.
-    pub fn check_liquidations(
-        &self,
-        marks: &HashMap<InstrumentId, Decimal>,
-    ) -> Vec<InstrumentId> {
+    pub fn check_liquidations(&self, marks: &HashMap<InstrumentId, Decimal>) -> Vec<InstrumentId> {
         let mut liquidated = Vec::new();
 
         for (instrument, pos) in &self.positions {
@@ -560,7 +555,13 @@ impl MarginLedger {
             "LIQUIDATION: force-closing position"
         );
 
-        self.apply_perp_fill(instrument, close_side, mark_price, closing_qty, Decimal::ZERO);
+        self.apply_perp_fill(
+            instrument,
+            close_side,
+            mark_price,
+            closing_qty,
+            Decimal::ZERO,
+        );
     }
 
     // =========================================================================
@@ -577,9 +578,7 @@ impl MarginLedger {
             .iter()
             .filter(|(_, pos)| !pos.qty.is_zero())
             .map(|(instrument, pos)| {
-                let unrealized = marks
-                    .get(instrument)
-                    .map(|mark| pos.unrealized_pnl(*mark));
+                let unrealized = marks.get(instrument).map(|mark| pos.unrealized_pnl(*mark));
 
                 PositionSnapshot {
                     instrument: instrument.clone(),
@@ -656,9 +655,9 @@ mod tests {
     #[test]
     fn test_required_margin() {
         let margin = IsolatedPosition::required_margin_for_order(
-            usdc(10000),          // $10k notional
-            Decimal::new(10, 0),  // 10x leverage
-            Decimal::new(2, 4),   // 0.02% fee
+            usdc(10000),         // $10k notional
+            Decimal::new(10, 0), // 10x leverage
+            Decimal::new(2, 4),  // 0.02% fee
         );
         // margin = 10000/10 = 1000, fee_buffer = 10000 * 0.0002 * 2 = 4
         assert_eq!(margin, Decimal::new(1004, 0));
@@ -694,7 +693,7 @@ mod tests {
         let result = ledger.check_margin_for_perp_order(
             &btc_perp(),
             OrderSide::Buy,
-            usdc(50000), // price
+            usdc(50000),  // price
             Decimal::ONE, // 1 BTC = $50k notional
             false,
         );

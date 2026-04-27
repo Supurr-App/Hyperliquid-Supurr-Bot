@@ -558,7 +558,9 @@ impl<E: Exchange + Send + Sync> Exchange for PaperExchange<E> {
             );
 
             // Check balance using margin-aware logic
-            if let Err(reason) = Self::check_balance_for_order(&state.simulator, &state.margin_ledger, order) {
+            if let Err(reason) =
+                Self::check_balance_for_order(&state.simulator, &state.margin_ledger, order)
+            {
                 #[cfg(feature = "wasm")]
                 web_sys::console::log_1(
                     &format!("[WASM Runner] Order REJECTED: {}", reason).into(),

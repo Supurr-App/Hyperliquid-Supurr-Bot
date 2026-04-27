@@ -15,6 +15,7 @@ pub mod context;
 pub mod engine;
 pub mod inventory;
 pub mod order_manager;
+pub mod performance_metrics;
 pub mod poll_guard;
 
 // Simulation layer: margin-aware accounting for paper/backtest (always available)
@@ -47,6 +48,7 @@ pub use context::*;
 pub use engine::*;
 pub use inventory::*;
 pub use order_manager::*;
+pub use performance_metrics::*;
 pub use poll_guard::*;
 
 // Re-exports (native-only)
@@ -64,6 +66,6 @@ pub use runner::{BacktestResult, EngineRunner, PollResult, RunnerConfig, Trading
 
 // Re-export testing utilities (always available)
 pub use testing::{FillSimulator, MockQuoteSource, PendingOrder, QuoteSource, SimulatedFill};
-pub use testing::{MockExchange, MockKnobs, OrderFailMode, PaperExchange};// Re-export mock syncers (native-only, they depend on sync_traits)
 #[cfg(feature = "native")]
 pub use testing::{MockAccountSyncer, MockTradeSyncer};
+pub use testing::{MockExchange, MockKnobs, OrderFailMode, PaperExchange}; // Re-export mock syncers (native-only, they depend on sync_traits)

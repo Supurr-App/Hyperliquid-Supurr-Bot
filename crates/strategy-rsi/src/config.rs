@@ -77,7 +77,8 @@ impl RsiStrategyConfig {
             errors.push("oversold must be less than overbought".into());
         }
         let has_base_size = self.order_size > Decimal::ZERO;
-        let has_notional = self.order_notional_quote
+        let has_notional = self
+            .order_notional_quote
             .map(|n| n > Decimal::ZERO)
             .unwrap_or(false);
 

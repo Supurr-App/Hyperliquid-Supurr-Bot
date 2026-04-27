@@ -76,9 +76,32 @@ pub fn run_backtest(prices_json: String, config_json: String) -> js_sys::Promise
         let environment = config.parse_environment();
         web_sys::console::log_1(&format!("[WASM Runner] Environment: {:?}", environment).into());
 
+        // Use strategy allocation as the metrics base, matching native backtests.
+        // The exchange balance is only simulation margin; the benchmark equity
+        // should not be diluted by a fixed fake wallet bankroll.
+        let sim_config = config.effective_simulation_config();
+        let simulation_balance =
+            Decimal::from_str(&sim_config.starting_balance_usdc).unwrap_or(Decimal::new(10_000, 0));
+        let metrics_starting_balance = config
+            .strategy_allocated_capital_usdc()
+            .unwrap_or(simulation_balance);
+        let exchange_starting_balance = if simulation_balance > metrics_starting_balance {
+            simulation_balance
+        } else {
+            metrics_starting_balance
+        };
+
+        web_sys::console::log_1(
+            &format!(
+                "[WASM Runner] Metrics capital: {} USDC, exchange balance: {} USDC",
+                metrics_starting_balance, exchange_starting_balance
+            )
+            .into(),
+        );
+
         // Create paper exchange with initial balance
         let mut initial_balances = HashMap::new();
-        initial_balances.insert(AssetId::new("USDC"), Decimal::new(100_000, 0)); // 100k for backtest
+        initial_balances.insert(AssetId::new("USDC"), exchange_starting_balance);
 
         let paper = Arc::new(create_standalone_paper_exchange_with_id(
             initial_balances,
@@ -86,8 +109,8 @@ pub fn run_backtest(prices_json: String, config_json: String) -> js_sys::Promise
             environment,
         ));
 
-        // Set realistic fee rate (0.02%)
-        paper.set_fee_rate(dec!(0.0002)).await;
+        let fee_rate = Decimal::from_str(&sim_config.fee_rate).unwrap_or(dec!(0.00025));
+        paper.set_fee_rate(fee_rate).await;
 
         // Convert prices to quotes
         let spread = dec!(1.0); // $1 spread
@@ -128,6 +151,8 @@ pub fn run_backtest(prices_json: String, config_json: String) -> js_sys::Promise
         let runner_config = RunnerConfig {
             min_poll_delay_ms: 0, // No delay between polls for backtesting
             cleanup_delay_ms: 0,  // No cleanup delay for backtesting
+            metrics_mode: "backtest".to_string(),
+            metrics_starting_balance_usdc: Some(metrics_starting_balance),
             ..RunnerConfig::default()
         };
         let mut runner = EngineRunner::new(engine, runner_config);

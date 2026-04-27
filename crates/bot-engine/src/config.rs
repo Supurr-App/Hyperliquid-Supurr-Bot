@@ -20,7 +20,9 @@ use strategy_arbitrage::{ArbitrageConfig, ArbitrageStrategy};
 use strategy_dca::{DCAConfig, DCADirection, DCAStrategy};
 use strategy_grid::{GridConfig, GridMode, GridStrategy};
 use strategy_market_maker::{MarketMaker, MarketMakerConfig, SkewMode};
+#[cfg(feature = "strategy-rsi")]
 use strategy_rsi::{RsiStrategy, RsiStrategyConfig};
+#[cfg(feature = "strategy-tick-trader")]
 use strategy_tick_trader::{TickTrader, TickTraderConfig};
 
 // =============================================================================
@@ -189,8 +191,8 @@ impl BotConfig {
             private_key: String,
         }
 
-        let creds: Creds = serde_json::from_str(&content)
-            .context("Failed to parse ~/.supurr/credentials.json")?;
+        let creds: Creds =
+            serde_json::from_str(&content).context("Failed to parse ~/.supurr/credentials.json")?;
 
         // Use config values if present, fallback to credentials file
         let pk = if self.private_key.is_empty() {
@@ -249,6 +251,61 @@ impl BotConfig {
         } else {
             None
         }
+    }
+
+    /// Capital allocated to the active strategy, used as the performance metric base.
+    ///
+    /// This is deliberately strategy-scoped. Wallet/account equity is not used here because
+    /// unrelated idle wallet capital would dilute APR, Sharpe, and drawdown percentages.
+    pub fn strategy_allocated_capital_usdc(&self) -> Option<Decimal> {
+        let strategy_type = self.strategy_type.to_lowercase();
+
+        if strategy_type == "grid" {
+            return self
+                .grid
+                .as_ref()
+                .and_then(|grid| Decimal::from_str(&grid.max_investment_quote).ok());
+        }
+
+        if strategy_type == "arbitrage" || strategy_type == "arb" {
+            return self
+                .arbitrage
+                .as_ref()
+                .and_then(|arb| Decimal::from_str(&arb.order_amount).ok());
+        }
+
+        if strategy_type == "dca" {
+            let dca = self.dca.as_ref()?;
+            let direction = match dca.direction.to_lowercase().as_str() {
+                "short" => DCADirection::Short,
+                _ => DCADirection::Long,
+            };
+            let config = DCAConfig {
+                strategy_id: StrategyId::new("metrics-dca"),
+                environment: self.parse_environment(),
+                market: self.primary_market().clone(),
+                direction,
+                trigger_price: Decimal::from_str(&dca.trigger_price).ok()?,
+                base_order_size: Decimal::from_str(&dca.base_order_size).ok()?,
+                dca_order_size: Decimal::from_str(&dca.dca_order_size).ok()?,
+                max_dca_orders: dca.max_dca_orders,
+                size_multiplier: Decimal::from_str(&dca.size_multiplier).ok()?,
+                price_deviation_pct: Decimal::from_str(&dca.price_deviation_pct).ok()?,
+                deviation_multiplier: Decimal::from_str(&dca.deviation_multiplier).ok()?,
+                take_profit_pct: Decimal::from_str(&dca.take_profit_pct).ok()?,
+                stop_loss: dca
+                    .stop_loss
+                    .as_ref()
+                    .and_then(|value| Decimal::from_str(value).ok()),
+                leverage: Decimal::from_str(&dca.leverage).ok()?,
+                max_leverage: Decimal::from_str(&dca.max_leverage).ok()?,
+                restart_on_complete: dca.restart_on_complete,
+                cooldown_period_secs: dca.cooldown_period_secs,
+            };
+            return Some(config.max_total_investment());
+        }
+
+        None
     }
 
     /// Get the effective simulation config, falling back to defaults if absent.
@@ -434,6 +491,9 @@ pub struct SyncConfigJson {
     /// HTTP timeout in seconds (default: 10)
     #[serde(default = "default_sync_timeout")]
     pub timeout_secs: u64,
+    /// Optional shared secret sent as x-bot-sync-secret.
+    #[serde(default)]
+    pub sync_secret: Option<String>,
     /// Enable syncing (default: true if sync section is present)
     #[serde(default = "default_sync_enabled")]
     pub enabled: bool,
@@ -711,26 +771,40 @@ pub fn build_strategy(config: &BotConfig) -> Result<Box<dyn Strategy>> {
 
         Ok(Box::new(DCAStrategy::new(dca_config)))
     } else if strategy_type == "tick_trader" {
-        // Tick-trader: custom strategy using custom_config() pattern
-        let tick_config: TickTraderConfig = config.custom_config("tick_trader")?;
-        let errors = tick_config.validate();
-        if !errors.is_empty() {
-            anyhow::bail!(
-                "Tick trader config validation failed: {}",
-                errors.join(", ")
-            );
+        #[cfg(feature = "strategy-tick-trader")]
+        {
+            // Tick-trader: custom strategy using custom_config() pattern
+            let tick_config: TickTraderConfig = config.custom_config("tick_trader")?;
+            let errors = tick_config.validate();
+            if !errors.is_empty() {
+                anyhow::bail!(
+                    "Tick trader config validation failed: {}",
+                    errors.join(", ")
+                );
+            }
+            Ok(Box::new(TickTrader::new(tick_config)))
         }
-        Ok(Box::new(TickTrader::new(tick_config)))
+        #[cfg(not(feature = "strategy-tick-trader"))]
+        {
+            anyhow::bail!("Tick trader strategy is not enabled in this build")
+        }
     } else if strategy_type == "rsi" {
-        // RSI strategy: uses inline Wilder's RSI indicator + bar aggregation
-        let rsi_config: RsiStrategyConfig = config.custom_config("rsi")?;
-        let errors = rsi_config.validate();
-        if !errors.is_empty() {
-            anyhow::bail!("RSI config validation failed: {}", errors.join(", "));
+        #[cfg(feature = "strategy-rsi")]
+        {
+            // RSI strategy: uses inline Wilder's RSI indicator + bar aggregation
+            let rsi_config: RsiStrategyConfig = config.custom_config("rsi")?;
+            let errors = rsi_config.validate();
+            if !errors.is_empty() {
+                anyhow::bail!("RSI config validation failed: {}", errors.join(", "));
+            }
+            let market = config.primary_market().clone();
+            let environment = config.parse_environment();
+            Ok(Box::new(RsiStrategy::new(rsi_config, market, environment)))
         }
-        let market = config.primary_market().clone();
-        let environment = config.parse_environment();
-        Ok(Box::new(RsiStrategy::new(rsi_config, market, environment)))
+        #[cfg(not(feature = "strategy-rsi"))]
+        {
+            anyhow::bail!("RSI strategy is not enabled in this build")
+        }
     } else if is_mm {
         // Market maker strategy
         let mm_json = config
@@ -868,4 +942,102 @@ pub fn build_instrument_metas(config: &BotConfig) -> Vec<InstrumentMeta> {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bot_core::HyperliquidMarket;
+    use rust_decimal_macros::dec;
+
+    fn btc_perp_market() -> Market {
+        Market::Hyperliquid(HyperliquidMarket::Perp {
+            base: "BTC".to_string(),
+            quote: "USDC".to_string(),
+            index: 0,
+            instrument_meta: None,
+        })
+    }
+
+    fn base_config(strategy_type: &str) -> BotConfig {
+        BotConfig {
+            environment: "mainnet".to_string(),
+            private_key: String::new(),
+            address: String::new(),
+            vault_address: None,
+            strategy_type: strategy_type.to_string(),
+            markets: vec![btc_perp_market()],
+            poll_delay_ms: 500,
+            grid: None,
+            mm: None,
+            dca: None,
+            arbitrage: None,
+            builder_fee: None,
+            sync: None,
+            simulation: None,
+            extra: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn grid_allocated_capital_uses_max_investment_quote() {
+        let mut config = base_config("grid");
+        config.grid = Some(GridConfigJson {
+            mode: "long".to_string(),
+            levels: 10,
+            start_price: "77000".to_string(),
+            end_price: "78000".to_string(),
+            max_investment_quote: "123.45".to_string(),
+            leverage: "20".to_string(),
+            max_leverage: "40".to_string(),
+            post_only: false,
+            stop_loss: None,
+            take_profit: None,
+            trailing_up_limit: None,
+            trailing_down_limit: None,
+        });
+
+        assert_eq!(config.strategy_allocated_capital_usdc(), Some(dec!(123.45)));
+    }
+
+    #[test]
+    fn arbitrage_allocated_capital_uses_order_amount() {
+        let mut config = base_config("arb");
+        config.arbitrage = Some(ArbitrageConfigJson {
+            order_amount: "50".to_string(),
+            perp_leverage: "5".to_string(),
+            min_opening_spread_pct: "0.2".to_string(),
+            min_closing_spread_pct: "0.05".to_string(),
+            spot_slippage_buffer_pct: "0.1".to_string(),
+            perp_slippage_buffer_pct: "0.1".to_string(),
+        });
+
+        assert_eq!(config.strategy_allocated_capital_usdc(), Some(dec!(50)));
+    }
+
+    #[test]
+    fn dca_allocated_capital_uses_full_ladder_not_wallet_balance() {
+        let mut config = base_config("dca");
+        config.dca = Some(DCAConfigJson {
+            direction: "long".to_string(),
+            trigger_price: "100".to_string(),
+            base_order_size: "1".to_string(),
+            dca_order_size: "1".to_string(),
+            max_dca_orders: 2,
+            size_multiplier: "2".to_string(),
+            price_deviation_pct: "10".to_string(),
+            deviation_multiplier: "1".to_string(),
+            take_profit_pct: "2".to_string(),
+            stop_loss: None,
+            leverage: "1".to_string(),
+            max_leverage: "10".to_string(),
+            restart_on_complete: false,
+            cooldown_period_secs: 60,
+        });
+
+        // Base: 1 * 100 = 100
+        // DCA 1: 1 * 90 = 90
+        // DCA 2: 2 * 81 = 162
+        assert_eq!(config.strategy_allocated_capital_usdc(), Some(dec!(352)));
+    }
 }

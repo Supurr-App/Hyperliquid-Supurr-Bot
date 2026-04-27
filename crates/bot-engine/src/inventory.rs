@@ -76,14 +76,9 @@ impl InventoryLedger {
 
     /// Reserve funds for an order
     /// Returns true if reservation succeeded, false if insufficient funds
-    pub fn reserve(
-        &mut self,
-        order_id: &ClientOrderId,
-        asset: &AssetId,
-        amount: Decimal,
-    ) -> bool {
+    pub fn reserve(&mut self, order_id: &ClientOrderId, asset: &AssetId, amount: Decimal) -> bool {
         let entry = self.balances.entry(asset.clone()).or_default();
-        
+
         if entry.available() < amount {
             return false;
         }
@@ -184,7 +179,8 @@ impl InventoryLedger {
 
     /// Register a strategy allocation
     pub fn set_allocation(&mut self, allocation: StrategyAllocation) {
-        self.strategy_allocations.insert(allocation.strategy_id.clone(), allocation);
+        self.strategy_allocations
+            .insert(allocation.strategy_id.clone(), allocation);
     }
 
     /// Check if a strategy has budget for an amount
@@ -196,7 +192,8 @@ impl InventoryLedger {
     ) -> bool {
         if let Some(allocation) = self.strategy_allocations.get(strategy_id) {
             if let Some(&budget) = allocation.budgets.get(asset) {
-                let reserved = self.strategy_reserved
+                let reserved = self
+                    .strategy_reserved
                     .get(&(strategy_id.clone(), asset.clone()))
                     .copied()
                     .unwrap_or_default();
@@ -213,9 +210,3 @@ impl Default for InventoryLedger {
         Self::new()
     }
 }
-
-
-
-
-
-

@@ -54,15 +54,16 @@ impl Adx {
     /// The bar must provide high, low, and close values.
     pub fn update(&mut self, high: f64, low: f64, close: f64) -> Option<f64> {
         // Need at least one previous bar for directional movement
-        let (prev_high, prev_low, prev_close) = match (self.prev_high, self.prev_low, self.prev_close) {
-            (Some(h), Some(l), Some(c)) => (h, l, c),
-            _ => {
-                self.prev_high = Some(high);
-                self.prev_low = Some(low);
-                self.prev_close = Some(close);
-                return None;
-            }
-        };
+        let (prev_high, prev_low, prev_close) =
+            match (self.prev_high, self.prev_low, self.prev_close) {
+                (Some(h), Some(l), Some(c)) => (h, l, c),
+                _ => {
+                    self.prev_high = Some(high);
+                    self.prev_low = Some(low);
+                    self.prev_close = Some(close);
+                    return None;
+                }
+            };
         self.bars_seen += 1;
 
         // ── Step 1: Directional Movement ──
@@ -106,8 +107,7 @@ impl Adx {
             // and fall through to compute DX below
         } else {
             // Wilder smoothing for subsequent bars
-            self.smoothed_plus_dm =
-                self.smoothed_plus_dm - (self.smoothed_plus_dm / n) + plus_dm;
+            self.smoothed_plus_dm = self.smoothed_plus_dm - (self.smoothed_plus_dm / n) + plus_dm;
             self.smoothed_minus_dm =
                 self.smoothed_minus_dm - (self.smoothed_minus_dm / n) + minus_dm;
             self.smoothed_tr = self.smoothed_tr - (self.smoothed_tr / n) + tr;
@@ -166,13 +166,13 @@ mod tests {
         // Need: 1 bar for prev + 3 bars for DI smoothing + 3 bars for ADX smoothing = 7 bars total
         // Bars 1-6 should return None, bar 7 should return Some
         let bars: Vec<(f64, f64, f64)> = vec![
-            (44.0, 42.0, 43.0),   // bar 1: stored as prev
-            (45.0, 43.0, 44.5),   // bar 2: DI accumulation 1
-            (46.0, 43.5, 44.0),   // bar 3: DI accumulation 2
-            (46.5, 44.0, 45.0),   // bar 4: DI accumulation 3 → first DX
-            (47.0, 44.5, 46.0),   // bar 5: DX warmup 2
-            (47.5, 45.0, 46.5),   // bar 6: DX warmup 3
-            (48.0, 45.5, 47.0),   // bar 7: ADX ready (first smoothed beyond seed)
+            (44.0, 42.0, 43.0), // bar 1: stored as prev
+            (45.0, 43.0, 44.5), // bar 2: DI accumulation 1
+            (46.0, 43.5, 44.0), // bar 3: DI accumulation 2
+            (46.5, 44.0, 45.0), // bar 4: DI accumulation 3 → first DX
+            (47.0, 44.5, 46.0), // bar 5: DX warmup 2
+            (47.5, 45.0, 46.5), // bar 6: DX warmup 3
+            (48.0, 45.5, 47.0), // bar 7: ADX ready (first smoothed beyond seed)
         ];
 
         let mut first_some_idx = None;
@@ -415,4 +415,3 @@ mod tests {
         );
     }
 }
-

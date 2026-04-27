@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::time::Duration;
 
+use crate::performance_metrics::PerformanceMetricsSnapshot;
 // Re-use SyncError from account_syncer to avoid duplication
 pub use crate::account_syncer::SyncError;
 
@@ -31,6 +32,8 @@ pub struct TradeSyncerConfig {
     /// Instruments to filter fills (only sync fills for these instruments)
     /// Empty = sync all fills (no filter)
     pub instruments: Vec<InstrumentId>,
+    /// Optional shared secret for upstream sync auth.
+    pub sync_secret: Option<String>,
 }
 
 impl Default for TradeSyncerConfig {
@@ -43,6 +46,7 @@ impl Default for TradeSyncerConfig {
             max_retries: 3,
             retry_delay_ms: 1000,
             instruments: Vec::new(),
+            sync_secret: None,
         }
     }
 }
@@ -74,6 +78,8 @@ pub struct SyncRequest {
     pub current_price: Option<String>,
     pub stop_bot: bool,
     pub stop_reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// Response from sync API
@@ -114,6 +120,8 @@ pub struct TradeSyncer {
     last_pnl: Option<f64>,
     /// Timestamp when the syncer was created (only sync fills after this time)
     start_timestamp: i64,
+    /// Latest performance metrics to include in upstream metadata
+    metrics_snapshot: Option<PerformanceMetricsSnapshot>,
 }
 
 impl TradeSyncer {
@@ -145,6 +153,7 @@ impl TradeSyncer {
             last_sync_ts: 0,
             last_pnl: None,
             start_timestamp,
+            metrics_snapshot: None,
         })
     }
 
@@ -203,6 +212,10 @@ impl TradeSyncer {
         self.pending_fills.len()
     }
 
+    pub fn set_metrics_snapshot(&mut self, snapshot: Option<PerformanceMetricsSnapshot>) {
+        self.metrics_snapshot = snapshot;
+    }
+
     /// Sync pending fills to upstream API
     ///
     /// Returns the PnL from the upstream API on success
@@ -237,6 +250,7 @@ impl TradeSyncer {
             current_price: current_price.map(|p| p.to_string()),
             stop_bot,
             stop_reason: stop_reason.to_string(),
+            metadata: self.metadata_payload(),
         };
 
         // Execute with retry
@@ -265,6 +279,14 @@ impl TradeSyncer {
             pnl: Some(response.pnl),
             last_synced_trade_id: Some(response.synced.trade_id),
             trades_synced: trades_count,
+        })
+    }
+
+    fn metadata_payload(&self) -> Option<serde_json::Value> {
+        self.metrics_snapshot.as_ref().map(|snapshot| {
+            serde_json::json!({
+                "performance_metrics": snapshot
+            })
         })
     }
 
@@ -316,13 +338,14 @@ impl TradeSyncer {
         url: &str,
         request: &SyncRequest,
     ) -> Result<SyncResponse, SyncError> {
-        let response = self
+        let mut request_builder = self
             .client
             .post(url)
-            .header("Content-Type", "application/json")
-            .json(request)
-            .send()
-            .await?;
+            .header("Content-Type", "application/json");
+        if let Some(secret) = self.config.sync_secret.as_deref().filter(|s| !s.is_empty()) {
+            request_builder = request_builder.header("x-bot-sync-secret", secret);
+        }
+        let response = request_builder.json(request).send().await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -408,6 +431,13 @@ impl crate::sync_traits::TradeSync for TradeSyncer {
         TradeSyncer::last_pnl(self)
     }
 
+    fn set_metrics_snapshot(
+        &mut self,
+        snapshot: Option<crate::performance_metrics::PerformanceMetricsSnapshot>,
+    ) {
+        TradeSyncer::set_metrics_snapshot(self, snapshot)
+    }
+
     async fn sync(
         &mut self,
         current_price: Option<Decimal>,
@@ -438,7 +468,45 @@ impl crate::sync_traits::TradeSync for TradeSyncer {
 
 mod tests {
     use super::*;
+    use crate::performance_metrics::{
+        PerformanceBenchmark, PerformanceMetrics, PerformanceMetricsSnapshot,
+    };
     use bot_core::{AssetId, Fee, OrderSide, Price, Qty, TradeId};
+
+    fn make_metrics_snapshot() -> PerformanceMetricsSnapshot {
+        PerformanceMetricsSnapshot {
+            schema_version: 1,
+            mode: "backtest".to_string(),
+            scope: "backtest_window".to_string(),
+            run_started_at_ms: None,
+            metrics: PerformanceMetrics {
+                period_return_pct: Some(1.0),
+                apr_pct: Some(365.0),
+                sharpe: Some(1.5),
+                max_drawdown_pct: Some(0.5),
+                max_drawdown_usdc: "5".to_string(),
+                win_rate_pct: Some(100.0),
+                closed_trade_count: 1,
+                winning_trade_count: 1,
+                losing_trade_count: 0,
+                fill_count: 2,
+                total_fees: "0.2".to_string(),
+                total_volume: "200".to_string(),
+                net_pnl: "10".to_string(),
+                fee_drag_pct: Some(0.02),
+            },
+            benchmark: PerformanceBenchmark {
+                start_ts_ms: Some(1),
+                end_ts_ms: Some(2),
+                duration_ms: Some(1),
+                quote_count: 2,
+                starting_balance_usdc: Some("1000".to_string()),
+                ending_balance_usdc: Some("1010".to_string()),
+                instrument: Some("BTC-PERP".to_string()),
+            },
+            latest_equity: None,
+        }
+    }
 
     fn make_test_fill(trade_id: &str, instrument: &str) -> Fill {
         // Use a timestamp in the future to ensure it passes the start_timestamp check
@@ -634,5 +702,26 @@ mod tests {
         assert_eq!(trade.fee, "0.25");
         assert_eq!(trade.fee_currency, "USDC");
         assert_eq!(trade.ts_event, 1700000000000);
+    }
+
+    #[test]
+    fn test_metadata_payload_includes_performance_metrics() {
+        let config = TradeSyncerConfig {
+            bot_id: "test-bot".to_string(),
+            upstream_url: "http://test.com".to_string(),
+            ..Default::default()
+        };
+        let mut syncer = TradeSyncer::new(config).unwrap();
+        syncer.set_metrics_snapshot(Some(make_metrics_snapshot()));
+
+        let metadata = syncer.metadata_payload().expect("metadata");
+        assert_eq!(
+            metadata["performance_metrics"]["metrics"]["net_pnl"],
+            serde_json::json!("10")
+        );
+        assert_eq!(
+            metadata["performance_metrics"]["mode"],
+            serde_json::json!("backtest")
+        );
     }
 }

@@ -25,7 +25,8 @@ fn create_test_config() -> DCAConfig {
         market: Market::Hyperliquid(HyperliquidMarket::Perp {
             base: "BTC".to_string(),
             quote: "USDC".to_string(),
-            index: 0, instrument_meta: None,
+            index: 0,
+            instrument_meta: None,
         }),
         direction: DCADirection::Long,
         trigger_price: dec!(100000), // Base order at $100k
@@ -661,7 +662,8 @@ mod tests {
             market: Market::Hyperliquid(HyperliquidMarket::Spot {
                 base: "SOL".to_string(),
                 quote: "USDC".to_string(),
-                index: 0, instrument_meta: None,
+                index: 0,
+                instrument_meta: None,
             }),
             direction: DCADirection::Long,
             trigger_price: dec!(100),   // $100 per SOL

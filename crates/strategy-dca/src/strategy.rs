@@ -467,7 +467,10 @@ impl DCAStrategy {
             return;
         }
 
-        let replacement = PendingTakeProfit { price: tp_price, qty };
+        let replacement = PendingTakeProfit {
+            price: tp_price,
+            qty,
+        };
 
         if let Some(canceling_tp_id) = self.state.tp_cancel_in_flight.clone() {
             ctx.log_info(&format!(

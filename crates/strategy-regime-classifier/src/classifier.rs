@@ -131,8 +131,7 @@ pub struct RegimeClassifier {
 impl RegimeClassifier {
     /// Create a new classifier with the given configuration.
     pub fn new(config: RegimeClassifierConfig) -> Self {
-        let atr = AverageTrueRange::new(config.atr_period)
-            .expect("Invalid ATR period");
+        let atr = AverageTrueRange::new(config.atr_period).expect("Invalid ATR period");
         let bb = BollingerBands::new(config.bb_period, config.bb_multiplier)
             .expect("Invalid Bollinger Bands config");
         let adx = Adx::new(config.adx_period);
@@ -458,9 +457,17 @@ mod tests {
         }
 
         let snap = last_snapshot.expect("Should produce snapshot");
-        assert!(snap.adx >= 0.0 && snap.adx <= 100.0, "ADX out of range: {}", snap.adx);
+        assert!(
+            snap.adx >= 0.0 && snap.adx <= 100.0,
+            "ADX out of range: {}",
+            snap.adx
+        );
         assert!(snap.atr >= 0.0, "ATR should be non-negative: {}", snap.atr);
-        assert!(snap.bb_width >= 0.0, "BB width should be non-negative: {}", snap.bb_width);
+        assert!(
+            snap.bb_width >= 0.0,
+            "BB width should be non-negative: {}",
+            snap.bb_width
+        );
         assert!(
             snap.atr_percentile >= 0.0 && snap.atr_percentile <= 100.0,
             "ATR percentile out of range: {}",
@@ -490,9 +497,9 @@ mod tests {
     /// the classifier, then verify the ATR values match.
     #[test]
     fn test_atr_correctness_cross_validation() {
+        use crate::bar_ext::TaBar;
         use ta::indicators::AverageTrueRange;
         use ta::Next;
-        use crate::bar_ext::TaBar;
 
         let period = 5;
         let mut ta_atr = AverageTrueRange::new(period).unwrap();
@@ -531,7 +538,10 @@ mod tests {
                 assert!(
                     diff < 0.001,
                     "ATR mismatch at bar {}: classifier={:.4} ta={:.4} diff={:.6}",
-                    i, snap.atr, ta_val, diff
+                    i,
+                    snap.atr,
+                    ta_val,
+                    diff
                 );
             }
         }
@@ -541,9 +551,9 @@ mod tests {
     /// (upper - lower) / middle * 100 produces correct values.
     #[test]
     fn test_bb_width_correctness() {
+        use crate::bar_ext::TaBar;
         use ta::indicators::BollingerBands;
         use ta::Next;
-        use crate::bar_ext::TaBar;
 
         let period = 5;
         let multiplier = 2.0;
@@ -582,7 +592,7 @@ mod tests {
             widths.push(width);
         }
         // Width should be positive once we have enough bars
-        let last_5_avg: f64 = widths[widths.len()-5..].iter().sum::<f64>() / 5.0;
+        let last_5_avg: f64 = widths[widths.len() - 5..].iter().sum::<f64>() / 5.0;
         assert!(
             last_5_avg > 0.0,
             "BB width should be positive for trending data, got {:.4}",
@@ -664,8 +674,6 @@ mod tests {
             "Should detect LowVol when BB squeezes and ADX collapses"
         );
     }
-
-
 
     /// Test that hysteresis actually allows transition after enough bars.
     #[test]
@@ -772,7 +780,10 @@ mod tests {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         // Simple hash to get a value between 0 and 1
-        let hash = (n.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407)) >> 33;
+        let hash = (n
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407))
+            >> 33;
         (hash as f64) / (u32::MAX as f64)
     }
 }

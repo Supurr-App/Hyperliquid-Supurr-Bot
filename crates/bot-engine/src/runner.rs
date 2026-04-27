@@ -8,12 +8,16 @@
 //! 5. Syncs fills to upstream API for PnL tracking
 
 use crate::compat::sleep;
+use crate::performance_metrics::{
+    BacktestClosedTrade, BacktestEquityPoint, PerformanceBenchmark, PerformanceMetrics,
+    PerformanceMetricsSnapshot, PerformanceTracker,
+};
 use crate::poll_guard::{PollGuard, PollOutcome};
 use bot_core::{
     CancelAll, CancelOrder, ClientOrderId, Command, Event, Exchange, ExchangeError, ExchangeHealth,
     ExchangeInstance, Fill, InstrumentId, OrderAcceptedEvent, OrderCanceledEvent,
     OrderCompletedEvent, OrderFilledEvent, OrderInput, OrderRejectedEvent, PlaceOrder,
-    PlaceOrderResult, Qty, Quote, QuoteEvent,
+    PlaceOrderResult, Position, Qty, Quote, QuoteEvent,
 };
 use futures::channel::mpsc;
 use rust_decimal::Decimal;
@@ -47,7 +51,11 @@ pub struct BacktestFill {
     pub price: String,
     pub qty: String,
     pub side: String,
+    /// Legacy field: fee asset/currency.
     pub fee: String,
+    /// Additive numeric fee amount for consumers that need fee math.
+    pub fee_amount: String,
+    pub fee_currency: String,
 }
 
 /// Backtest result summary for JSON output
@@ -55,6 +63,10 @@ pub struct BacktestFill {
 pub struct BacktestResult {
     pub fills: Vec<BacktestFill>,
     pub trade_count: usize,
+    pub metrics: PerformanceMetrics,
+    pub benchmark: PerformanceBenchmark,
+    pub equity_curve: Vec<BacktestEquityPoint>,
+    pub closed_trades: Vec<BacktestClosedTrade>,
     pub final_position_qty: String,
     pub avg_entry_price: Option<String>,
     pub realized_pnl: String,
@@ -101,6 +113,10 @@ pub struct RunnerConfig {
     pub quote_poll_interval_ms: u64,
     /// Cleanup delay after strategy stop (ms) - time to wait for cleanup commands to complete
     pub cleanup_delay_ms: u64,
+    /// Performance metrics mode label included in sync/backtest payloads.
+    pub metrics_mode: String,
+    /// Strategy-scoped starting USDC capital used for return/APR/equity metrics.
+    pub metrics_starting_balance_usdc: Option<Decimal>,
 }
 
 impl Default for RunnerConfig {
@@ -112,6 +128,8 @@ impl Default for RunnerConfig {
             backoff_multiplier: 2.0,
             quote_poll_interval_ms: 1000,
             cleanup_delay_ms: 5000, // 5 seconds for cleanup
+            metrics_mode: "live".to_string(),
+            metrics_starting_balance_usdc: None,
         }
     }
 }
@@ -155,6 +173,8 @@ pub struct EngineRunner {
     current_mid_price: Option<Decimal>,
     /// Trading statistics for meta logging
     stats: TradingStats,
+    /// Shared metrics tracker used by backtests and upstream sync payloads
+    performance_tracker: PerformanceTracker,
     /// Poll guard for fills (per-exchange backoff + error classification)
     fills_guard: PollGuard,
     /// Poll guard for quotes (per-exchange backoff + error classification)
@@ -170,6 +190,11 @@ impl EngineRunner {
         let quotes_guard = PollGuard::new("quotes", &config);
 
         Self {
+            performance_tracker: PerformanceTracker::new(
+                config.metrics_mode.clone(),
+                config.metrics_starting_balance_usdc,
+                None,
+            ),
             config,
             engine,
             exchanges: HashMap::new(),
@@ -240,6 +265,7 @@ impl EngineRunner {
 
     /// Add an instrument to poll quotes for
     pub fn add_instrument(&mut self, instrument: InstrumentId) {
+        self.performance_tracker.set_instrument(instrument.clone());
         self.instruments.push(instrument);
     }
 
@@ -264,6 +290,8 @@ impl EngineRunner {
     pub fn get_backtest_results(&self, instrument: &InstrumentId) -> BacktestResult {
         let fills = self.engine.get_fills();
         let position = self.engine.position(instrument);
+        let positions = self.tracked_positions();
+        let metrics_snapshot = self.performance_tracker.snapshot(fills, &positions);
 
         // Compute volume from fills
         let mut total_volume = Decimal::ZERO;
@@ -284,13 +312,19 @@ impl EngineRunner {
                 price: f.price.0.to_string(),
                 qty: f.qty.0.to_string(),
                 side: format!("{:?}", f.side),
-                fee: f.fee.asset.0.to_string(),
+                fee: f.fee.asset.0.clone(),
+                fee_amount: f.fee.amount.to_string(),
+                fee_currency: f.fee.asset.0.clone(),
             })
             .collect();
 
         BacktestResult {
             trade_count: backtest_fills.len(),
             fills: backtest_fills,
+            metrics: metrics_snapshot.metrics,
+            benchmark: metrics_snapshot.benchmark,
+            equity_curve: self.performance_tracker.equity_curve(),
+            closed_trades: self.performance_tracker.closed_trades(fills),
             final_position_qty: position.qty.to_string(),
             avg_entry_price: position.avg_entry_px.map(|p| p.0.to_string()),
             realized_pnl: position.realized_pnl.to_string(),
@@ -300,6 +334,26 @@ impl EngineRunner {
             net_pnl: net_pnl.to_string(),
             exit_reason: self.shutdown_reason.clone(),
         }
+    }
+
+    fn tracked_positions(&self) -> Vec<Position> {
+        self.instruments
+            .iter()
+            .map(|instrument| self.engine.position(instrument))
+            .collect()
+    }
+
+    fn current_net_pnl(&self) -> Decimal {
+        self.tracked_positions()
+            .iter()
+            .map(Position::current_pnl)
+            .sum()
+    }
+
+    fn performance_snapshot(&self) -> PerformanceMetricsSnapshot {
+        let positions = self.tracked_positions();
+        self.performance_tracker
+            .snapshot(self.engine.get_fills(), &positions)
     }
 
     /// Run the main event loop
@@ -329,10 +383,14 @@ impl EngineRunner {
         // Backtest completion detection constant
         const MAX_EMPTY_POLLS: u32 = 3;
 
-        let mut _loop_iteration: u32 = 0;
+        #[cfg(target_arch = "wasm32")]
+        let mut loop_iteration: u32 = 0;
 
         loop {
-            _loop_iteration += 1;
+            #[cfg(target_arch = "wasm32")]
+            {
+                loop_iteration += 1;
+            }
 
             // Log every iteration in WASM for debugging
             #[cfg(target_arch = "wasm32")]
@@ -474,7 +532,14 @@ impl EngineRunner {
 
                                 // Sync to backend via AccountSyncer
                                 #[cfg(feature = "native")]
+                                let account_metrics_snapshot = if self.account_syncer.is_some() {
+                                    Some(self.performance_snapshot())
+                                } else {
+                                    None
+                                };
+                                #[cfg(feature = "native")]
                                 if let Some(ref mut syncer) = self.account_syncer {
+                                    syncer.set_metrics_snapshot(account_metrics_snapshot);
                                     if syncer.should_sync() {
                                         if let Err(e) = syncer.sync(&account_state, false, "").await
                                         {
@@ -540,6 +605,12 @@ impl EngineRunner {
                                 });
 
                                 self.handle_event(event).await;
+
+                                self.performance_tracker.record_equity_point(
+                                    quote.ts,
+                                    Some(mid),
+                                    self.current_net_pnl(),
+                                );
                             }
                         }
                         PollOutcome::Empty => {} // backoff already applied by guard
@@ -567,7 +638,14 @@ impl EngineRunner {
 
             // Periodic trade sync to upstream API
             #[cfg(feature = "native")]
+            let trade_metrics_snapshot = if self.trade_syncer.is_some() {
+                Some(self.performance_snapshot())
+            } else {
+                None
+            };
+            #[cfg(feature = "native")]
             if let Some(ref mut syncer) = self.trade_syncer {
+                syncer.set_metrics_snapshot(trade_metrics_snapshot);
                 if syncer.should_sync() {
                     match syncer.sync(self.current_mid_price, false, "").await {
                         Ok(result) => {
@@ -646,7 +724,14 @@ impl EngineRunner {
 
         // Final sync to upstream API on shutdown
         #[cfg(feature = "native")]
+        let final_trade_metrics_snapshot = if self.trade_syncer.is_some() {
+            Some(self.performance_snapshot())
+        } else {
+            None
+        };
+        #[cfg(feature = "native")]
         if let Some(ref mut syncer) = self.trade_syncer {
+            syncer.set_metrics_snapshot(final_trade_metrics_snapshot);
             let reason = self
                 .shutdown_reason
                 .as_deref()
@@ -1487,10 +1572,11 @@ mod tests {
     use crate::testing::MockExchange;
     use crate::EngineConfig;
     use bot_core::{
-        AssetId, Environment, ExchangeId, InstrumentKind, InstrumentMeta, MarketIndex, OrderSide,
-        Price, Strategy, StrategyContext, StrategyId, TimeInForce,
+        AssetId, Environment, ExchangeId, Fee, InstrumentKind, InstrumentMeta, MarketIndex,
+        OrderSide, Price, Quote, Strategy, StrategyContext, StrategyId, TimeInForce, TradeId,
     };
     use rust_decimal::Decimal;
+    use rust_decimal_macros::dec;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::time::timeout;
 
@@ -1588,6 +1674,128 @@ mod tests {
             fee_asset_default: Some(AssetId::new("USDC")),
             kind: InstrumentKind::Perp,
         }
+    }
+
+    fn record_backtest_fill(
+        runner: &mut EngineRunner,
+        instrument: &InstrumentId,
+        side: OrderSide,
+        price: Decimal,
+        qty: Decimal,
+        fee: Decimal,
+        ts: i64,
+        trade_id: &str,
+    ) {
+        runner
+            .engine
+            .apply_position_fill(instrument, side, Qty::new(qty), Price::new(price));
+        runner.engine.apply_fill_fee(instrument, fee);
+        runner.engine.record_fill(OrderFilledEvent {
+            exchange: ExchangeId::new("hyperliquid"),
+            trade_id: TradeId::new(trade_id),
+            client_id: ClientOrderId::new(format!("client-{}", trade_id)),
+            instrument: instrument.clone(),
+            side,
+            price: Price::new(price),
+            qty: Qty::new(qty),
+            net_qty: Qty::new(qty),
+            fee: Fee::new(fee, AssetId::new("USDC")),
+            ts,
+        });
+    }
+
+    fn record_backtest_equity(
+        runner: &mut EngineRunner,
+        instrument: &InstrumentId,
+        price: Decimal,
+        ts: i64,
+    ) {
+        runner.engine.update_quote(Quote {
+            instrument: instrument.clone(),
+            bid: Price::new(price),
+            ask: Price::new(price),
+            bid_size: Qty::new(dec!(1000)),
+            ask_size: Qty::new(dec!(1000)),
+            ts,
+        });
+        runner
+            .performance_tracker
+            .record_equity_point(ts, Some(price), runner.current_net_pnl());
+    }
+
+    #[test]
+    fn backtest_result_embeds_deterministic_performance_metrics() {
+        let instrument = InstrumentId::new("BTC-PERP");
+        let mut engine = Engine::new(EngineConfig::default());
+        engine.register_instrument(instrument_meta(&instrument));
+
+        let mut runner = EngineRunner::new(
+            engine,
+            RunnerConfig {
+                metrics_mode: "backtest".to_string(),
+                metrics_starting_balance_usdc: Some(dec!(1000)),
+                cleanup_delay_ms: 0,
+                ..Default::default()
+            },
+        );
+        runner.add_instrument(instrument.clone());
+
+        record_backtest_equity(&mut runner, &instrument, dec!(100), 1);
+        record_backtest_fill(
+            &mut runner,
+            &instrument,
+            OrderSide::Buy,
+            dec!(100),
+            dec!(1),
+            dec!(1),
+            2,
+            "open-long",
+        );
+        record_backtest_equity(&mut runner, &instrument, dec!(100), 2);
+        record_backtest_fill(
+            &mut runner,
+            &instrument,
+            OrderSide::Sell,
+            dec!(110),
+            dec!(1),
+            dec!(1),
+            3,
+            "close-long",
+        );
+        record_backtest_equity(&mut runner, &instrument, dec!(110), 3);
+
+        let result = runner.get_backtest_results(&instrument);
+
+        assert_eq!(result.trade_count, 2);
+        assert_eq!(result.metrics.fill_count, 2);
+        assert_eq!(result.metrics.closed_trade_count, 1);
+        assert_eq!(result.metrics.win_rate_pct, Some(100.0));
+        assert_eq!(result.metrics.winning_trade_count, 1);
+        assert_eq!(result.metrics.losing_trade_count, 0);
+        assert_eq!(result.metrics.total_fees, "2");
+        assert_eq!(result.metrics.total_volume, "210");
+        assert_eq!(result.metrics.net_pnl, "8");
+        assert_eq!(result.metrics.period_return_pct, Some(0.8));
+        assert_eq!(result.metrics.max_drawdown_usdc, "1");
+        assert_eq!(result.metrics.max_drawdown_pct, Some(0.1));
+        assert_eq!(result.fills[0].fee, "USDC");
+        assert_eq!(result.fills[0].fee_amount, "1");
+        assert_eq!(result.fills[0].fee_currency, "USDC");
+        assert_eq!(result.closed_trades.len(), 1);
+        assert_eq!(result.closed_trades[0].gross_pnl, "10");
+        assert_eq!(result.closed_trades[0].fees, "2");
+        assert_eq!(result.closed_trades[0].net_pnl, "8");
+        assert_eq!(result.equity_curve.len(), 3);
+        assert_eq!(result.benchmark.quote_count, 3);
+        assert_eq!(
+            result.benchmark.starting_balance_usdc,
+            Some("1000".to_string())
+        );
+        assert_eq!(
+            result.benchmark.ending_balance_usdc,
+            Some("1008".to_string())
+        );
+        assert_eq!(result.benchmark.instrument, Some("BTC-PERP".to_string()));
     }
 
     #[tokio::test]

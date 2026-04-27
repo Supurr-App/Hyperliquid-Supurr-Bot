@@ -271,13 +271,14 @@ async fn main() -> Result<()> {
         tracing::info!("Spot coin configured: {} (for alias resolution)", coin);
     }
     // Build outcome config from market if applicable
-    let outcome = config.primary_market().outcome_params().map(
-        |(outcome_id, side, name)| OutcomeConfig {
+    let outcome = config
+        .primary_market()
+        .outcome_params()
+        .map(|(outcome_id, side, name)| OutcomeConfig {
             outcome_id,
             side,
             name,
-        },
-    );
+        });
 
     // #simplify, hip,spot,perps should be abstracted away
     let hl_config = HyperliquidConfig {
@@ -318,8 +319,7 @@ async fn main() -> Result<()> {
                 tracing::info!("📄 PAPER TRADING MODE - orders will be simulated locally");
                 let starting_balance = Decimal::from_str(&sim_config.starting_balance_usdc)
                     .unwrap_or(Decimal::new(10_000, 0));
-                let fee_rate = Decimal::from_str(&sim_config.fee_rate)
-                    .unwrap_or(dec!(0.00025));
+                let fee_rate = Decimal::from_str(&sim_config.fee_rate).unwrap_or(dec!(0.00025));
 
                 let mut initial_balances = std::collections::HashMap::new();
                 initial_balances.insert(AssetId::new("USDC"), starting_balance);
@@ -330,16 +330,21 @@ async fn main() -> Result<()> {
 
                 tracing::info!(
                     "Paper exchange: balance={} USDC, fee_rate={}",
-                    starting_balance, fee_rate
+                    starting_balance,
+                    fee_rate
                 );
 
                 // Inject strategy leverage into MarginLedger
                 if let Some((leverage, max_leverage)) = config.strategy_leverage() {
                     let instrument = config.instrument_id();
-                    paper.set_instrument_leverage(&instrument, leverage, max_leverage).await;
+                    paper
+                        .set_instrument_leverage(&instrument, leverage, max_leverage)
+                        .await;
                     tracing::info!(
                         "Paper leverage set: {}x (max {}x) for {}",
-                        leverage, max_leverage, instrument
+                        leverage,
+                        max_leverage,
+                        instrument
                     );
                 }
 
@@ -353,8 +358,7 @@ async fn main() -> Result<()> {
 
                 let starting_balance = Decimal::from_str(&sim_config.starting_balance_usdc)
                     .unwrap_or(Decimal::new(10_000, 0));
-                let fee_rate = Decimal::from_str(&sim_config.fee_rate)
-                    .unwrap_or(dec!(0.00025));
+                let fee_rate = Decimal::from_str(&sim_config.fee_rate).unwrap_or(dec!(0.00025));
 
                 // Load prices from JSON file
                 let prices_str = std::fs::read_to_string(prices_path)
@@ -388,16 +392,21 @@ async fn main() -> Result<()> {
 
                 tracing::info!(
                     "Backtest exchange: balance={} USDC, fee_rate={}",
-                    starting_balance, fee_rate
+                    starting_balance,
+                    fee_rate
                 );
 
                 // Inject strategy leverage into MarginLedger
                 if let Some((leverage, max_leverage)) = config.strategy_leverage() {
                     let instrument = config.instrument_id();
-                    paper.set_instrument_leverage(&instrument, leverage, max_leverage).await;
+                    paper
+                        .set_instrument_leverage(&instrument, leverage, max_leverage)
+                        .await;
                     tracing::info!(
                         "Backtest leverage set: {}x (max {}x) for {}",
-                        leverage, max_leverage, instrument
+                        leverage,
+                        max_leverage,
+                        instrument
                     );
                 }
 
@@ -543,7 +552,9 @@ async fn main() -> Result<()> {
     // Extract leverage from strategy config and set it on the exchange
     // Skip for Paper/Backtest modes - only needed for live trading
     let is_arb = config.strategy_type == "arbitrage" || config.strategy_type == "arb";
-    if (!config.is_spot() && !config.is_outcome() || is_arb) && matches!(trading_mode, TradingMode::Live) {
+    if (!config.is_spot() && !config.is_outcome() || is_arb)
+        && matches!(trading_mode, TradingMode::Live)
+    {
         let strategy_leverage: Option<u32> = if let Some(ref g) = config.grid {
             Decimal::from_str(&g.leverage).ok().and_then(|d| d.to_u32())
         } else if let Some(ref d) = config.dca {
@@ -595,9 +606,33 @@ async fn main() -> Result<()> {
     } else {
         config.poll_delay_ms
     };
+
+    let strategy_metrics_capital_usdc = config.strategy_allocated_capital_usdc();
+    if let Some(capital) = strategy_metrics_capital_usdc {
+        tracing::info!(
+            "Performance metrics seeded with strategy allocated capital: {} USDC",
+            capital
+        );
+    } else {
+        tracing::warn!(
+            "Performance metrics could not infer strategy allocated capital; falling back where available"
+        );
+    }
+
     let runner_config = bot_engine::RunnerConfig {
         min_poll_delay_ms: poll_delay,
         quote_poll_interval_ms: poll_delay,
+        metrics_mode: match &trading_mode {
+            TradingMode::Live => "live",
+            TradingMode::Paper => "paper",
+            TradingMode::Backtest { .. } => "backtest",
+        }
+        .to_string(),
+        metrics_starting_balance_usdc: match &trading_mode {
+            TradingMode::Live => strategy_metrics_capital_usdc,
+            TradingMode::Paper | TradingMode::Backtest { .. } => strategy_metrics_capital_usdc
+                .or_else(|| Decimal::from_str(&sim_config.starting_balance_usdc).ok()),
+        },
         ..Default::default()
     };
 
@@ -623,6 +658,7 @@ async fn main() -> Result<()> {
             max_retries: 3,
             retry_delay_ms: 1000,
             instruments: instruments.clone(),
+            sync_secret: sync.sync_secret.clone(),
         })
     });
 
@@ -647,6 +683,7 @@ async fn main() -> Result<()> {
                 timeout_secs: 10,
                 max_retries: 3,
                 retry_delay_ms: 1000,
+                sync_secret: sync.sync_secret.clone(),
             })
         })
     } else {
@@ -732,8 +769,7 @@ async fn main() -> Result<()> {
     // See on_start() TODO above for full architecture design.
 
     // Deregister from fills tracking (only if we registered — Live + Poll only)
-    if matches!(trading_mode, TradingMode::Live)
-        && sync_mechanism == bot_core::SyncMechanism::Poll
+    if matches!(trading_mode, TradingMode::Live) && sync_mechanism == bot_core::SyncMechanism::Poll
     {
         if let Err(e) = hl_client.deregister_user().await {
             tracing::warn!("Failed to deregister from fills tracking: {}", e);

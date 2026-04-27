@@ -7,6 +7,7 @@ use bot_core::{AccountState, Fill};
 use rust_decimal::Decimal;
 
 use crate::account_syncer::SyncError;
+use crate::performance_metrics::PerformanceMetricsSnapshot;
 
 /// Common result for sync operations (trait-level abstraction)
 #[derive(Debug, Clone)]
@@ -31,6 +32,9 @@ pub trait TradeSync: Send + Sync {
 
     /// Get last known PnL
     fn last_pnl(&self) -> Option<f64>;
+
+    /// Set the latest performance metrics snapshot to include in sync metadata.
+    fn set_metrics_snapshot(&mut self, _snapshot: Option<PerformanceMetricsSnapshot>) {}
 
     /// Sync pending fills to upstream
     async fn sync(
@@ -65,6 +69,9 @@ pub trait AccountSync: Send + Sync {
 
     /// Get last known PnL
     fn last_pnl(&self) -> Option<f64>;
+
+    /// Set the latest performance metrics snapshot to include in sync metadata.
+    fn set_metrics_snapshot(&mut self, _snapshot: Option<PerformanceMetricsSnapshot>) {}
 
     /// Sync account state to upstream
     async fn sync(

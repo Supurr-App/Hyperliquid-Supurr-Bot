@@ -8,10 +8,7 @@
 //! 4. Create phantom agent with source ("a" for mainnet, "b" for testnet)
 //! 5. Sign using EIP-712 typed data
 
-use ethers_core::types::{
-    transaction::eip712::EIP712Domain,
-    Address, Signature, H256, U256,
-};
+use ethers_core::types::{transaction::eip712::EIP712Domain, Address, Signature, H256, U256};
 use ethers_signers::{LocalWallet, Signer};
 use sha3::{Digest, Keccak256};
 use thiserror::Error;
@@ -90,15 +87,19 @@ impl HyperliquidSigner {
         expires_after: Option<u64>,
     ) -> Result<H256, SigningError> {
         // Serialize action to msgpack (use to_vec for compatibility with Python msgpack.packb)
-        let msgpack_data = rmp_serde::to_vec(action)
-            .map_err(|e| SigningError::MsgpackError(e.to_string()))?;
+        let msgpack_data =
+            rmp_serde::to_vec(action).map_err(|e| SigningError::MsgpackError(e.to_string()))?;
 
         tracing::info!("=== ACTION HASH DEBUG ===");
         tracing::info!(
             "Action JSON: {}",
             serde_json::to_string(action).unwrap_or_default()
         );
-        tracing::info!("Msgpack bytes ({} bytes): {}", msgpack_data.len(), hex::encode(&msgpack_data));
+        tracing::info!(
+            "Msgpack bytes ({} bytes): {}",
+            msgpack_data.len(),
+            hex::encode(&msgpack_data)
+        );
 
         let mut data = msgpack_data;
 
@@ -123,7 +124,11 @@ impl HyperliquidSigner {
         tracing::info!("Nonce: {}", nonce);
         tracing::info!("Nonce bytes: {}", hex::encode(&nonce.to_be_bytes()));
         tracing::info!("Vault address: {:?}", vault_address);
-        tracing::info!("Full data to hash ({} bytes): {}", data.len(), hex::encode(&data));
+        tracing::info!(
+            "Full data to hash ({} bytes): {}",
+            data.len(),
+            hex::encode(&data)
+        );
 
         // Keccak256 hash
         let mut hasher = Keccak256::new();
@@ -131,7 +136,10 @@ impl HyperliquidSigner {
         let hash = hasher.finalize();
 
         let hash_result = H256::from_slice(&hash);
-        tracing::info!("Action hash (connectionId): 0x{}", hex::encode(hash_result.as_bytes()));
+        tracing::info!(
+            "Action hash (connectionId): 0x{}",
+            hex::encode(hash_result.as_bytes())
+        );
 
         Ok(hash_result)
     }
@@ -145,7 +153,12 @@ impl HyperliquidSigner {
         expires_after: Option<u64>,
     ) -> Result<HyperliquidSignature, SigningError> {
         tracing::debug!("Signing L1 action with signer address: {:?}", self.address);
-        tracing::debug!("Nonce: {}, vault_address: {:?}, is_mainnet: {}", nonce, vault_address, self.is_mainnet);
+        tracing::debug!(
+            "Nonce: {}, vault_address: {:?}, is_mainnet: {}",
+            nonce,
+            vault_address,
+            self.is_mainnet
+        );
 
         let hash = self.action_hash(action, nonce, vault_address, expires_after)?;
 
@@ -155,7 +168,11 @@ impl HyperliquidSigner {
             connection_id: hash,
         };
 
-        tracing::debug!("Phantom agent source: '{}', connectionId: 0x{}", phantom_agent.source, hex::encode(phantom_agent.connection_id.as_bytes()));
+        tracing::debug!(
+            "Phantom agent source: '{}', connectionId: 0x{}",
+            phantom_agent.source,
+            hex::encode(phantom_agent.connection_id.as_bytes())
+        );
 
         // Sign using EIP-712
         self.sign_phantom_agent(&phantom_agent).await
@@ -185,15 +202,26 @@ impl HyperliquidSigner {
 
         // struct_hash = keccak256(abi.encode(type_hash, keccak256(source), connectionId))
         let source_hash = keccak256(phantom_agent.source.as_bytes());
-        tracing::info!("Source: '{}', source_hash: 0x{}", phantom_agent.source, hex::encode(&source_hash));
-        tracing::info!("ConnectionId: 0x{}", hex::encode(phantom_agent.connection_id.as_bytes()));
+        tracing::info!(
+            "Source: '{}', source_hash: 0x{}",
+            phantom_agent.source,
+            hex::encode(&source_hash)
+        );
+        tracing::info!(
+            "ConnectionId: 0x{}",
+            hex::encode(phantom_agent.connection_id.as_bytes())
+        );
 
         let mut struct_data = Vec::new();
         struct_data.extend_from_slice(&type_hash);
         struct_data.extend_from_slice(&source_hash);
         struct_data.extend_from_slice(phantom_agent.connection_id.as_bytes());
         let struct_hash = keccak256(&struct_data);
-        tracing::info!("Struct data ({} bytes): 0x{}", struct_data.len(), hex::encode(&struct_data));
+        tracing::info!(
+            "Struct data ({} bytes): 0x{}",
+            struct_data.len(),
+            hex::encode(&struct_data)
+        );
         tracing::info!("Struct hash: 0x{}", hex::encode(&struct_hash));
 
         // Final hash = keccak256("\x19\x01" + domain_separator + struct_hash)
@@ -262,10 +290,7 @@ fn compute_domain_separator(domain: &EIP712Domain) -> [u8; 32] {
     let version_hash = keccak256(domain.version.as_ref().unwrap().as_bytes());
 
     let mut chain_id_bytes = [0u8; 32];
-    domain
-        .chain_id
-        .unwrap()
-        .to_big_endian(&mut chain_id_bytes);
+    domain.chain_id.unwrap().to_big_endian(&mut chain_id_bytes);
 
     let verifying_contract = domain.verifying_contract.unwrap();
     let mut contract_bytes = [0u8; 32];

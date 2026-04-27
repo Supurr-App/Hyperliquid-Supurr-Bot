@@ -1224,8 +1224,11 @@ impl Exchange for HyperliquidClient {
         let mut account_value = None;
         let mut unrealized_pnl = None;
 
-        // Extract clearinghouseState if available
-        if let Some(clearing) = raw_state.get("clearinghouseState") {
+        // `clearinghouseState` info calls return the state object directly, while
+        // some callers wrap it under `clearinghouseState`. Support both shapes.
+        let clearing = raw_state.get("clearinghouseState").unwrap_or(&raw_state);
+
+        if clearing.get("marginSummary").is_some() {
             // Extract account value
             if let Some(margin_summary) = clearing.get("marginSummary") {
                 if let Some(av) = margin_summary.get("accountValue").and_then(|v| v.as_str()) {

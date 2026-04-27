@@ -8,6 +8,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+use crate::performance_metrics::PerformanceMetricsSnapshot;
+
 /// Configuration for account syncing
 #[derive(Debug, Clone)]
 pub struct AccountSyncerConfig {
@@ -23,6 +25,8 @@ pub struct AccountSyncerConfig {
     pub max_retries: u32,
     /// Initial retry delay in milliseconds
     pub retry_delay_ms: u64,
+    /// Optional shared secret for upstream sync auth.
+    pub sync_secret: Option<String>,
 }
 
 impl Default for AccountSyncerConfig {
@@ -34,6 +38,7 @@ impl Default for AccountSyncerConfig {
             timeout_secs: 10,
             max_retries: 3,
             retry_delay_ms: 1000,
+            sync_secret: None,
         }
     }
 }
@@ -116,6 +121,8 @@ pub struct AccountSyncer {
     last_sync_ts: i64,
     /// Last sync PnL
     last_pnl: Option<f64>,
+    /// Latest performance metrics to include in upstream metadata
+    metrics_snapshot: Option<PerformanceMetricsSnapshot>,
 }
 
 impl AccountSyncer {
@@ -140,6 +147,7 @@ impl AccountSyncer {
             client,
             last_sync_ts: 0,
             last_pnl: None,
+            metrics_snapshot: None,
         })
     }
 
@@ -152,6 +160,10 @@ impl AccountSyncer {
     /// Get the last known PnL
     pub fn last_pnl(&self) -> Option<f64> {
         self.last_pnl
+    }
+
+    pub fn set_metrics_snapshot(&mut self, snapshot: Option<PerformanceMetricsSnapshot>) {
+        self.metrics_snapshot = snapshot;
     }
 
     /// Sync account state to upstream API
@@ -196,7 +208,7 @@ impl AccountSyncer {
             ts: now / 1000, // seconds
             stop_bot,
             stop_reason: stop_reason.to_string(),
-            metadata: None,
+            metadata: self.metadata_payload(),
         };
 
         tracing::info!(
@@ -217,6 +229,14 @@ impl AccountSyncer {
         Ok(SyncResult {
             success: true,
             pnl: Some(response.pnl),
+        })
+    }
+
+    fn metadata_payload(&self) -> Option<serde_json::Value> {
+        self.metrics_snapshot.as_ref().map(|snapshot| {
+            serde_json::json!({
+                "performance_metrics": snapshot
+            })
         })
     }
 
@@ -271,13 +291,14 @@ impl AccountSyncer {
         url: &str,
         request: &ClearingHouseStateRequest,
     ) -> Result<SyncResponse, SyncError> {
-        let response = self
+        let mut request_builder = self
             .client
             .post(url)
-            .header("Content-Type", "application/json")
-            .json(request)
-            .send()
-            .await?;
+            .header("Content-Type", "application/json");
+        if let Some(secret) = self.config.sync_secret.as_deref().filter(|s| !s.is_empty()) {
+            request_builder = request_builder.header("x-bot-sync-secret", secret);
+        }
+        let response = request_builder.json(request).send().await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -321,6 +342,13 @@ impl crate::sync_traits::AccountSync for AccountSyncer {
         AccountSyncer::last_pnl(self)
     }
 
+    fn set_metrics_snapshot(
+        &mut self,
+        snapshot: Option<crate::performance_metrics::PerformanceMetricsSnapshot>,
+    ) {
+        AccountSyncer::set_metrics_snapshot(self, snapshot)
+    }
+
     async fn sync(
         &mut self,
         account_state: &AccountState,
@@ -351,6 +379,44 @@ impl crate::sync_traits::AccountSync for AccountSyncer {
 
 mod tests {
     use super::*;
+    use crate::performance_metrics::{
+        PerformanceBenchmark, PerformanceMetrics, PerformanceMetricsSnapshot,
+    };
+
+    fn make_metrics_snapshot() -> PerformanceMetricsSnapshot {
+        PerformanceMetricsSnapshot {
+            schema_version: 1,
+            mode: "paper".to_string(),
+            scope: "current_run".to_string(),
+            run_started_at_ms: Some(1),
+            metrics: PerformanceMetrics {
+                period_return_pct: Some(1.0),
+                apr_pct: Some(365.0),
+                sharpe: Some(1.5),
+                max_drawdown_pct: Some(0.5),
+                max_drawdown_usdc: "5".to_string(),
+                win_rate_pct: Some(100.0),
+                closed_trade_count: 1,
+                winning_trade_count: 1,
+                losing_trade_count: 0,
+                fill_count: 2,
+                total_fees: "0.2".to_string(),
+                total_volume: "200".to_string(),
+                net_pnl: "10".to_string(),
+                fee_drag_pct: Some(0.02),
+            },
+            benchmark: PerformanceBenchmark {
+                start_ts_ms: Some(1),
+                end_ts_ms: Some(2),
+                duration_ms: Some(1),
+                quote_count: 2,
+                starting_balance_usdc: Some("1000".to_string()),
+                ending_balance_usdc: Some("1010".to_string()),
+                instrument: Some("BTC-PERP".to_string()),
+            },
+            latest_equity: None,
+        }
+    }
 
     #[test]
     fn test_config_validation() {
@@ -377,5 +443,26 @@ mod tests {
             ..Default::default()
         };
         assert!(AccountSyncer::new(config).is_ok());
+    }
+
+    #[test]
+    fn test_metadata_payload_includes_performance_metrics() {
+        let config = AccountSyncerConfig {
+            bot_id: "test-bot".to_string(),
+            upstream_url: "http://test.com".to_string(),
+            ..Default::default()
+        };
+        let mut syncer = AccountSyncer::new(config).unwrap();
+        syncer.set_metrics_snapshot(Some(make_metrics_snapshot()));
+
+        let metadata = syncer.metadata_payload().expect("metadata");
+        assert_eq!(
+            metadata["performance_metrics"]["metrics"]["net_pnl"],
+            serde_json::json!("10")
+        );
+        assert_eq!(
+            metadata["performance_metrics"]["mode"],
+            serde_json::json!("paper")
+        );
     }
 }
