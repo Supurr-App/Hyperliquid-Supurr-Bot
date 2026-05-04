@@ -1,0 +1,43 @@
+{
+  "environment": "mainnet",
+  "address": "0x0ecba0a94c0797bec6916bce5094651b8fdd10db",
+  "vault_address": null,
+
+  "strategy_type": "grid",
+
+  "markets": [
+    {
+      "exchange": "hyperliquid",
+      "type": "perp",
+      "base": "BTC",
+      "quote": "USDC",
+      "index": 0,
+      "instrument_meta": {
+        "tick_size": "1",
+        "lot_size": "0.00001",
+        "min_qty": "0.00001",
+        "min_notional": "10"
+      }
+    }
+  ],
+
+  "poll_delay_ms": 2000,
+
+  "grid": {
+    "mode": "short",
+    "levels": 4,
+    "start_price": "78000",
+    "end_price": "79000",
+    "max_investment_quote": "25",
+    "leverage": "10",
+    "max_leverage": "50",
+    "post_only": false,
+    "stop_loss": null,
+    "take_profit": null,
+    "trailing_up_limit": null,
+    "trailing_down_limit": null
+  },
+
+  "builder_fee": null,
+  "sync": null
+}

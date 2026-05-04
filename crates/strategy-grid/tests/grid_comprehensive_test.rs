@@ -92,8 +92,13 @@ async fn run_grid_test(
     delay_ms: u64,
 ) -> TestResult {
     let instrument = config.instrument_id();
+    let leverage = config.leverage;
+    let max_leverage = config.max_leverage;
 
     paper.enable_simulation_mode().await;
+    paper
+        .set_instrument_leverage(&instrument, leverage, max_leverage)
+        .await;
 
     let strategy = Box::new(GridStrategy::new(config));
 

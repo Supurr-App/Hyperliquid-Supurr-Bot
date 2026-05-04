@@ -264,7 +264,7 @@ impl FillSimulator {
                         &order.instrument,
                         order.side,
                         order.remaining_qty.clone(),
-                        quote.ask.clone(),
+                        order.price.clone(),
                     );
 
                     let fill = Fill {
@@ -305,7 +305,7 @@ impl FillSimulator {
                         &order.instrument,
                         order.side,
                         order.remaining_qty.clone(),
-                        quote.bid.clone(),
+                        order.price.clone(),
                     );
 
                     let fill = Fill {
@@ -481,7 +481,7 @@ mod tests {
             created_at: 0,
         });
 
-        // Quote with ask at 49999 (below order price) - should fill
+        // Quote with ask at 49999 (below order price) - resting limit should fill at order price.
         let mut quotes = HashMap::new();
         quotes.insert(
             InstrumentId::new("BTC-PERP"),
@@ -490,7 +490,7 @@ mod tests {
 
         let fills = sim.check_fills(&quotes, 1000);
         assert_eq!(fills.len(), 1);
-        assert_eq!(fills[0].fill.price.0, Decimal::new(49999, 0));
+        assert_eq!(fills[0].fill.price.0, Decimal::new(50000, 0));
         assert_eq!(sim.pending_orders_count(), 0);
     }
 
@@ -513,7 +513,7 @@ mod tests {
             created_at: 0,
         });
 
-        // Quote with bid at 50001 (above order price) - should fill
+        // Quote with bid at 50001 (above order price) - resting limit should fill at order price.
         let mut quotes = HashMap::new();
         quotes.insert(
             InstrumentId::new("BTC-PERP"),
@@ -522,6 +522,6 @@ mod tests {
 
         let fills = sim.check_fills(&quotes, 1000);
         assert_eq!(fills.len(), 1);
-        assert_eq!(fills[0].fill.price.0, Decimal::new(50001, 0));
+        assert_eq!(fills[0].fill.price.0, Decimal::new(50000, 0));
     }
 }

@@ -386,14 +386,19 @@ async fn test_grid_trending_market_position_accumulates() {
     // PaperExchange only fills orders when price CROSSES the order price
     let mut balances = HashMap::new();
     balances.insert(AssetId::new("USDC"), dec!(100000));
-    let paper_exchange = Arc::new(bot_engine::testing::create_standalone_paper_exchange(
+    let paper_exchange = Arc::new(bot_engine::testing::create_standalone_paper_exchange_with_id(
         balances,
+        "hyperliquid",
+        Environment::Testnet,
     ));
 
     paper_exchange.queue_quotes(quotes).await;
 
     // Set realistic fee rate (0.04% = 4 bps) to verify fee tracking
     paper_exchange.set_fee_rate(dec!(0.0004)).await;
+    paper_exchange
+        .set_instrument_leverage(&instrument, dec!(5), dec!(50))
+        .await;
 
     let grid_config = GridConfig {
         strategy_id: StrategyId::new("trend-test-grid"),
