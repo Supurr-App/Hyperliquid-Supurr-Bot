@@ -154,8 +154,13 @@ impl HyperliquidClient {
         self.hip3.as_ref().map(|h| h.dex_name.as_str())
     }
 
-    /// Get the quote currency (defaults to "USDC")
+    /// Get the quote currency for balance/account-value parsing.
+    /// HIP4 outcomes are quoted in USDH on HyperCore.
     pub fn quote_currency(&self) -> &str {
+        if self.config.is_outcome {
+            return "USDH";
+        }
+
         self.hip3
             .as_ref()
             .map(|h| h.quote_currency.as_str())
@@ -190,7 +195,7 @@ impl HyperliquidClient {
             return url;
         }
         match self.config.environment {
-            Environment::Mainnet => "http://node.supurr.app",
+            Environment::Mainnet => "https://api.hyperliquid.xyz",
             Environment::Testnet => "https://api.hyperliquid-testnet.xyz",
         }
     }
@@ -1218,7 +1223,16 @@ impl Exchange for HyperliquidClient {
 
     async fn poll_account_state(&self) -> Result<AccountState, ExchangeError> {
         let raw_state = self.fetch_user_state().await?;
+        Ok(self.parse_account_state(raw_state))
+    }
+}
 
+// =============================================================================
+// Account-state parsing
+// =============================================================================
+
+impl HyperliquidClient {
+    fn parse_account_state(&self, raw_state: serde_json::Value) -> AccountState {
         // Transform raw JSON to AccountState
         let mut positions = Vec::new();
         let mut account_value = None;
@@ -1228,7 +1242,64 @@ impl Exchange for HyperliquidClient {
         // some callers wrap it under `clearinghouseState`. Support both shapes.
         let clearing = raw_state.get("clearinghouseState").unwrap_or(&raw_state);
 
-        if clearing.get("marginSummary").is_some() {
+        if let Some(balances) = clearing.get("balances").and_then(|v| v.as_array()) {
+            let configured_outcome_coin = self.outcome.as_ref().map(|outcome| outcome.coin_name());
+            let configured_outcome_token =
+                self.outcome.as_ref().map(|outcome| outcome.token_name());
+            let configured_spot_coin = self.config.spot_coin.as_deref();
+            let quote_currency = self.quote_currency();
+
+            for balance in balances {
+                let Some(coin) = balance.get("coin").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+
+                let total = balance
+                    .get("total")
+                    .and_then(|v| v.as_str())
+                    .and_then(|value| Decimal::from_str(value).ok())
+                    .unwrap_or_default();
+
+                if coin == quote_currency {
+                    account_value = Some(total);
+                    continue;
+                }
+
+                if total == Decimal::ZERO {
+                    continue;
+                }
+
+                let is_configured_outcome = configured_outcome_coin.as_deref() == Some(coin)
+                    || configured_outcome_token.as_deref() == Some(coin);
+                let instrument = if is_configured_outcome {
+                    InstrumentId::new(format!(
+                        "{}-OUTCOME",
+                        configured_outcome_coin.as_deref().unwrap_or(coin)
+                    ))
+                } else if self.config.is_outcome || coin.starts_with('#') {
+                    continue;
+                } else if self.config.is_spot && configured_spot_coin != Some(coin) {
+                    continue;
+                } else {
+                    InstrumentId::new(format!("{}-SPOT", coin))
+                };
+
+                let avg_entry = balance
+                    .get("entryNtl")
+                    .and_then(|v| v.as_str())
+                    .and_then(|value| Decimal::from_str(value).ok())
+                    .filter(|entry_ntl| *entry_ntl > Decimal::ZERO && total != Decimal::ZERO)
+                    .map(|entry_ntl| Price::new(entry_ntl / total));
+
+                positions.push(PositionSnapshot {
+                    instrument,
+                    qty: total,
+                    avg_entry_px: avg_entry,
+                    unrealized_pnl: None,
+                    liquidation_px: None,
+                });
+            }
+        } else if clearing.get("marginSummary").is_some() {
             // Extract account value
             if let Some(margin_summary) = clearing.get("marginSummary") {
                 if let Some(av) = margin_summary.get("accountValue").and_then(|v| v.as_str()) {
@@ -1285,11 +1356,11 @@ impl Exchange for HyperliquidClient {
             }
         }
 
-        Ok(AccountState {
+        AccountState {
             positions,
             account_value,
             unrealized_pnl,
-        })
+        }
     }
 }
 
@@ -1298,10 +1369,9 @@ impl Exchange for HyperliquidClient {
 // =============================================================================
 
 impl HyperliquidClient {
-    /// Fetch outcome metadata from the testnet info endpoint.
+    /// Fetch outcome metadata from the configured Hyperliquid info endpoint.
     ///
     /// Returns the full outcomeMeta response including outcomes and questions.
-    /// This is only available on testnet.
     pub async fn fetch_outcome_meta(&self) -> Result<serde_json::Value, ExchangeError> {
         let payload = serde_json::json!({
             "type": "outcomeMeta"
@@ -1340,6 +1410,30 @@ pub fn new_client_with_registration(
 mod tests {
     use super::*;
 
+    fn test_config() -> HyperliquidConfig {
+        HyperliquidConfig {
+            environment: Environment::Mainnet,
+            private_key: "0x0000000000000000000000000000000000000000000000000000000000000001"
+                .to_string(),
+            vault_address: None,
+            main_address: Some("0x0000000000000000000000000000000000000001".to_string()),
+            timeout_secs: 10,
+            proxy_url: None,
+            base_url_override: None,
+            builder_fee: None,
+            hip3: None,
+            is_spot: false,
+            spot_coin: None,
+            spot_market_index: None,
+            is_outcome: false,
+            outcome: None,
+        }
+    }
+
+    fn test_client(config: HyperliquidConfig) -> HyperliquidClient {
+        HyperliquidClient::new(config).expect("test client")
+    }
+
     #[test]
     fn cumulative_address_limit_error_maps_to_deferred_retry() {
         let response = serde_json::json!({
@@ -1373,5 +1467,122 @@ mod tests {
         assert_eq!(retry_after_for_action_units(0), 10_500);
         assert_eq!(retry_after_for_action_units(1), 10_500);
         assert_eq!(retry_after_for_action_units(3), 30_500);
+    }
+
+    #[test]
+    fn mainnet_defaults_to_official_hyperliquid_api() {
+        let client = test_client(test_config());
+        assert_eq!(client.base_url(), "https://api.hyperliquid.xyz");
+    }
+
+    #[test]
+    fn outcome_order_wire_uses_outcome_asset_id() {
+        let mut config = test_config();
+        config.is_outcome = true;
+        config.outcome = Some(OutcomeConfig {
+            outcome_id: 1,
+            side: 0,
+            name: "BTC > 78213".to_string(),
+        });
+        let client = test_client(config);
+
+        let wire = client.build_order_wire(
+            &MarketIndex::new(0),
+            &ClientOrderId::new("client-order"),
+            OrderSide::Buy,
+            Price::new(Decimal::new(615, 3)),
+            Qty::new(Decimal::ONE),
+            TimeInForce::Gtc,
+            false,
+            false,
+        );
+
+        assert_eq!(wire.get("a").and_then(|v| v.as_u64()), Some(100_000_010));
+    }
+
+    #[test]
+    fn outcome_fills_use_outcome_instrument_suffix() {
+        let mut config = test_config();
+        config.is_outcome = true;
+        config.outcome = Some(OutcomeConfig {
+            outcome_id: 1,
+            side: 0,
+            name: "BTC > 78213".to_string(),
+        });
+        let client = test_client(config);
+
+        let fills = client.parse_fills(vec![HyperliquidUserFill {
+            coin: "#10".to_string(),
+            px: "0.615".to_string(),
+            sz: "2".to_string(),
+            side: "B".to_string(),
+            time: 1,
+            hash: "0xabc".to_string(),
+            oid: 42,
+            tid: Some(7),
+            fee: "0.001".to_string(),
+            fee_token: Some("USDC".to_string()),
+            cloid: None,
+            closed_pnl: None,
+        }]);
+
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].instrument.to_string(), "#10-OUTCOME");
+        assert_eq!(fills[0].qty.0, Decimal::new(2, 0));
+    }
+
+    #[test]
+    fn outcome_account_state_parses_only_configured_outcome_balance() {
+        let mut config = test_config();
+        config.is_outcome = true;
+        config.outcome = Some(OutcomeConfig {
+            outcome_id: 1,
+            side: 0,
+            name: "BTC > 78213".to_string(),
+        });
+        let client = test_client(config);
+
+        let state = client.parse_account_state(serde_json::json!({
+            "balances": [
+                {"coin": "USDC", "token": 0, "total": "97.5", "hold": "0.0", "entryNtl": "0.0"},
+                {"coin": "USDH", "token": 360, "total": "20.25", "hold": "0.0", "entryNtl": "0.0"},
+                {"coin": "+10", "total": "2", "hold": "0.0", "entryNtl": "1.2"},
+                {"coin": "HYPE", "token": 150, "total": "3", "hold": "0.0", "entryNtl": "9.0"}
+            ]
+        }));
+
+        assert_eq!(state.account_value, Some(Decimal::new(2025, 2)));
+        assert_eq!(state.positions.len(), 1);
+        assert_eq!(state.positions[0].instrument.to_string(), "#10-OUTCOME");
+        assert_eq!(state.positions[0].qty, Decimal::new(2, 0));
+        assert_eq!(
+            state.positions[0].avg_entry_px,
+            Some(Price::new(Decimal::new(6, 1)))
+        );
+        assert_eq!(state.positions[0].liquidation_px, None);
+    }
+
+    #[test]
+    fn spot_account_state_parses_only_configured_spot_coin() {
+        let mut config = test_config();
+        config.is_spot = true;
+        config.spot_coin = Some("HYPE".to_string());
+        let client = test_client(config);
+
+        let state = client.parse_account_state(serde_json::json!({
+            "balances": [
+                {"coin": "USDC", "token": 0, "total": "10", "hold": "0.0", "entryNtl": "0.0"},
+                {"coin": "HYPE", "token": 150, "total": "0.5", "hold": "0.0", "entryNtl": "20"},
+                {"coin": "#10", "token": 100000010, "total": "1", "hold": "0.0", "entryNtl": "0.6"}
+            ]
+        }));
+
+        assert_eq!(state.positions.len(), 1);
+        assert_eq!(state.positions[0].instrument.to_string(), "HYPE-SPOT");
+        assert_eq!(state.positions[0].qty, Decimal::new(5, 1));
+        assert_eq!(
+            state.positions[0].avg_entry_px,
+            Some(Price::new(Decimal::new(40, 0)))
+        );
     }
 }

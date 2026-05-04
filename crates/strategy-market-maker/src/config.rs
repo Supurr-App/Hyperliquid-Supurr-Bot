@@ -105,7 +105,7 @@ impl MarketMakerConfig {
 
     /// Returns true if this is a spot market
     pub fn is_spot(&self) -> bool {
-        self.market.is_spot()
+        self.market.is_spot_like()
     }
 
     /// Returns the instrument ID derived from the market

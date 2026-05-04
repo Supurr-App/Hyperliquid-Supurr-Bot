@@ -1,0 +1,34 @@
+{
+  "environment": "mainnet",
+  "strategy_type": "grid",
+  "markets": [
+    {
+      "exchange": "hyperliquid",
+      "type": "perp",
+      "base": "BTC",
+      "quote": "USDC",
+      "index": 0,
+      "instrument_meta": {
+        "tick_size": "0.1",
+        "lot_size": "0.00001",
+        "min_qty": "0.00001",
+        "min_notional": "10"
+      }
+    }
+  ],
+  "poll_delay_ms": 1000,
+  "grid": {
+    "mode": "long",
+    "levels": 10,
+    "start_price": "77310",
+    "end_price": "77485",
+    "max_investment_quote": "10",
+    "leverage": "20",
+    "max_leverage": "40",
+    "post_only": true,
+    "stop_loss": null,
+    "take_profit": null,
+    "trailing_up_limit": null,
+    "trailing_down_limit": null
+  }
+}

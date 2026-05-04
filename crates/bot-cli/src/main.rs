@@ -441,12 +441,6 @@ async fn main() -> Result<()> {
     // Note: register_user() is called later, after strategy is registered,
     // so we can check sync_mechanism()
 
-    // Determine quote currency (USDC by default, or from HIP-3 config)
-    let quote_currency = config
-        .hip3_config()
-        .map(|h| h.quote_currency.clone())
-        .unwrap_or_else(|| "USDC".to_string());
-
     // Determine instrument kind based on config
     let instrument_kind = config.primary_market().instrument_kind();
 
@@ -460,6 +454,7 @@ async fn main() -> Result<()> {
         .unwrap_or((Decimal::new(1, 1), Decimal::new(1, 4), None, None));
 
     // # simplify, engine shouldn't care about Exchange's market things
+    let quote_currency = primary_market.quote();
     let instrument_meta = InstrumentMeta {
         instrument_id: config.instrument_id(),
         market_index: config.market_index(),
@@ -469,7 +464,7 @@ async fn main() -> Result<()> {
         lot_size,
         min_qty,
         min_notional,
-        fee_asset_default: Some(AssetId::new(&quote_currency)),
+        fee_asset_default: Some(AssetId::new(quote_currency)),
         kind: instrument_kind,
     };
 
@@ -552,8 +547,7 @@ async fn main() -> Result<()> {
     // Extract leverage from strategy config and set it on the exchange
     // Skip for Paper/Backtest modes - only needed for live trading
     let is_arb = config.strategy_type == "arbitrage" || config.strategy_type == "arb";
-    if (!config.is_spot() && !config.is_outcome() || is_arb)
-        && matches!(trading_mode, TradingMode::Live)
+    if (config.primary_market_uses_margin() || is_arb) && matches!(trading_mode, TradingMode::Live)
     {
         let strategy_leverage: Option<u32> = if let Some(ref g) = config.grid {
             Decimal::from_str(&g.leverage).ok().and_then(|d| d.to_u32())
@@ -575,7 +569,7 @@ async fn main() -> Result<()> {
                     config
                         .markets
                         .iter()
-                        .find(|m| !m.is_spot())
+                        .find(|m| m.uses_margin())
                         .map(|m| m.market_index())
                         .unwrap_or_else(|| config.market_index())
                 } else {
@@ -594,7 +588,7 @@ async fn main() -> Result<()> {
                 // Don't fail startup - leverage might already be set correctly
             }
         }
-    } else if !config.is_spot() {
+    } else if config.primary_market_uses_margin() {
         tracing::info!("Skipping leverage update (Paper/Backtest mode)");
     }
 
@@ -609,9 +603,11 @@ async fn main() -> Result<()> {
 
     let strategy_metrics_capital_usdc = config.strategy_allocated_capital_usdc();
     if let Some(capital) = strategy_metrics_capital_usdc {
+        let quote = config.primary_market().quote();
         tracing::info!(
-            "Performance metrics seeded with strategy allocated capital: {} USDC",
-            capital
+            "Performance metrics seeded with strategy allocated capital: {} {}",
+            capital,
+            quote
         );
     } else {
         tracing::warn!(

@@ -592,15 +592,14 @@ impl GridStrategy {
             return;
         }
 
-        // Calculate effective investment (with fee buffer for perps)
-        let effective_investment = if self.config.is_spot() {
+        // Calculate notional budget (with fee buffer for margin markets)
+        let notional_budget = if self.config.is_spot() {
             self.config.max_investment_quote
         } else {
-            self.config.max_investment_quote * (ONE - fee_buffer())
+            self.config.max_investment_quote * (ONE - fee_buffer()) * self.config.leverage
         };
 
-        // Calculate notional budget and quote per level
-        let notional_budget = effective_investment * self.config.leverage;
+        // Calculate quote per level
         let quote_per_level = notional_budget / Decimal::from(levels - 1);
 
         if quote_per_level < Decimal::new(20, 0) {
@@ -1070,7 +1069,7 @@ impl GridStrategy {
         let qty = level.quantity;
         let side = level.side;
 
-        let order = PlaceOrder::limit(
+        let mut order = PlaceOrder::limit(
             self.config.exchange_instance(),
             self.config.instrument_id(),
             side,
@@ -1078,6 +1077,9 @@ impl GridStrategy {
             qty,
         )
         .with_client_id(client_id.clone());
+        if self.config.post_only {
+            order = order.post_only();
+        }
 
         ctx.log_info(&format!(
             "Placing OPEN order: level={} side={} price={} qty={} cloid={}",
@@ -1131,7 +1133,7 @@ impl GridStrategy {
 
         let client_id = ClientOrderId::generate();
 
-        let order = PlaceOrder::limit(
+        let mut order = PlaceOrder::limit(
             self.config.exchange_instance(),
             self.config.instrument_id(),
             side,
@@ -1139,6 +1141,9 @@ impl GridStrategy {
             qty,
         )
         .with_client_id(client_id.clone());
+        if self.config.post_only {
+            order = order.post_only();
+        }
 
         ctx.log_info(&format!(
             "Placing CLOSE order: level={} side={} price={} qty={} cloid={}",

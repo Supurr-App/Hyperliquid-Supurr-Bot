@@ -95,7 +95,7 @@ pub struct MarketConfig {
     /// Exchange name (e.g., "hyperliquid")
     pub exchange: String,
 
-    /// Market type: "perp", "spot", "hip3"
+    /// Market type: "perp", "spot", "hip3", or "outcome"
     #[serde(rename = "type")]
     pub market_type: String,
 
@@ -113,6 +113,18 @@ pub struct MarketConfig {
     /// DEX name (for HIP-3)
     #[serde(default)]
     pub dex: Option<String>,
+
+    /// Human-readable outcome name (for prediction markets)
+    #[serde(default)]
+    pub name: Option<String>,
+
+    /// Outcome ID from outcomeMeta (for prediction markets)
+    #[serde(default)]
+    pub outcome_id: Option<u32>,
+
+    /// Outcome side: 0 = Yes, 1 = No
+    #[serde(default)]
+    pub side: Option<u8>,
 
     /// Instrument metadata
     #[serde(default)]

@@ -29,6 +29,25 @@ use strategy_tick_trader::{TickTrader, TickTraderConfig};
 // Bot Configuration (V2 Format)
 // =============================================================================
 
+fn push_price_bound_errors(market: &Market, prices: &[(&str, Decimal)], errors: &mut Vec<String>) {
+    let Some((lower, upper)) = market.price_bounds() else {
+        return;
+    };
+
+    for (label, price) in prices {
+        if *price <= lower || *price >= upper {
+            errors.push(format!(
+                "{} ({}) must be > {} and < {} for {}",
+                label,
+                price,
+                lower,
+                upper,
+                market.instrument_id()
+            ));
+        }
+    }
+}
+
 /// Bot configuration - V2 format with markets array.
 /// This is the unified config format for all strategies.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -114,6 +133,16 @@ impl BotConfig {
     /// Check if this is a spot market
     pub fn is_spot(&self) -> bool {
         self.primary_market().is_spot()
+    }
+
+    /// Check if the primary market settles like spot with no margin/leverage.
+    pub fn is_spot_like(&self) -> bool {
+        self.primary_market().is_spot_like()
+    }
+
+    /// Check if the primary market uses margin/leverage.
+    pub fn primary_market_uses_margin(&self) -> bool {
+        self.primary_market().uses_margin()
     }
 
     /// Check if this is a prediction market outcome
@@ -220,6 +249,24 @@ impl BotConfig {
         // Validate markets array is not empty
         if config.markets.is_empty() {
             anyhow::bail!("Config must have at least one market in the 'markets' array");
+        }
+
+        let market_errors: Vec<String> = config
+            .markets
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, market)| {
+                market
+                    .validation_errors()
+                    .into_iter()
+                    .map(move |error| format!("markets[{}]: {}", idx, error))
+            })
+            .collect();
+        if !market_errors.is_empty() {
+            anyhow::bail!(
+                "Market configuration validation failed: {}",
+                market_errors.join(", ")
+            );
         }
 
         Ok(config)
@@ -711,7 +758,18 @@ pub fn build_strategy(config: &BotConfig) -> Result<Box<dyn Strategy>> {
         };
 
         // Validate grid config
-        let errors = grid_config.validate();
+        let mut errors = grid_config.validate();
+        let mut bounded_prices = vec![
+            ("grid.start_price", grid_config.start_price),
+            ("grid.end_price", grid_config.end_price),
+        ];
+        if let Some(price) = grid_config.trailing_up_limit {
+            bounded_prices.push(("grid.trailing_up_limit", price));
+        }
+        if let Some(price) = grid_config.trailing_down_limit {
+            bounded_prices.push(("grid.trailing_down_limit", price));
+        }
+        push_price_bound_errors(&grid_config.market, &bounded_prices, &mut errors);
         if !errors.is_empty() {
             anyhow::bail!(
                 "Grid configuration validation failed: {}",
@@ -764,7 +822,12 @@ pub fn build_strategy(config: &BotConfig) -> Result<Box<dyn Strategy>> {
         };
 
         // Validate DCA config
-        let errors = dca_config.validate();
+        let mut errors = dca_config.validate();
+        push_price_bound_errors(
+            &dca_config.market,
+            &[("dca.trigger_price", dca_config.trigger_price)],
+            &mut errors,
+        );
         if !errors.is_empty() {
             anyhow::bail!("DCA configuration validation failed: {}", errors.join(", "));
         }
@@ -959,6 +1022,15 @@ mod tests {
         })
     }
 
+    fn btc_outcome_market() -> Market {
+        Market::Hyperliquid(HyperliquidMarket::Outcome {
+            name: "BTC > 78213".to_string(),
+            outcome_id: 1,
+            side: 0,
+            instrument_meta: None,
+        })
+    }
+
     fn base_config(strategy_type: &str) -> BotConfig {
         BotConfig {
             environment: "mainnet".to_string(),
@@ -1039,5 +1111,59 @@ mod tests {
         // DCA 1: 1 * 90 = 90
         // DCA 2: 2 * 81 = 162
         assert_eq!(config.strategy_allocated_capital_usdc(), Some(dec!(352)));
+    }
+
+    #[test]
+    fn grid_rejects_outcome_prices_outside_probability_bounds() {
+        let mut config = base_config("grid");
+        config.markets = vec![btc_outcome_market()];
+        config.grid = Some(GridConfigJson {
+            mode: "long".to_string(),
+            levels: 2,
+            start_price: "0.50".to_string(),
+            end_price: "1.20".to_string(),
+            max_investment_quote: "20".to_string(),
+            leverage: "1".to_string(),
+            max_leverage: "1".to_string(),
+            post_only: false,
+            stop_loss: None,
+            take_profit: None,
+            trailing_up_limit: None,
+            trailing_down_limit: None,
+        });
+
+        let error = match build_strategy(&config) {
+            Ok(_) => panic!("outcome grid should fail bounds"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("grid.end_price"));
+    }
+
+    #[test]
+    fn dca_rejects_outcome_trigger_outside_probability_bounds() {
+        let mut config = base_config("dca");
+        config.markets = vec![btc_outcome_market()];
+        config.dca = Some(DCAConfigJson {
+            direction: "long".to_string(),
+            trigger_price: "1.01".to_string(),
+            base_order_size: "1".to_string(),
+            dca_order_size: "1".to_string(),
+            max_dca_orders: 1,
+            size_multiplier: "1".to_string(),
+            price_deviation_pct: "1".to_string(),
+            deviation_multiplier: "1".to_string(),
+            take_profit_pct: "1".to_string(),
+            stop_loss: None,
+            leverage: "1".to_string(),
+            max_leverage: "1".to_string(),
+            restart_on_complete: false,
+            cooldown_period_secs: 60,
+        });
+
+        let error = match build_strategy(&config) {
+            Ok(_) => panic!("outcome dca should fail bounds"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("dca.trigger_price"));
     }
 }

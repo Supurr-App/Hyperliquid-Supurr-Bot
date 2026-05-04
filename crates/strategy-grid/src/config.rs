@@ -139,9 +139,9 @@ impl GridConfig {
     // Market Accessors (derived from Market enum)
     // -------------------------------------------------------------------------
 
-    /// Whether this is a spot market (no liquidation, no leverage)
+    /// Whether this market is spot-like: no liquidation, no leverage.
     pub fn is_spot(&self) -> bool {
-        self.market.is_spot()
+        self.market.is_spot_like()
     }
 
     /// Get the instrument ID from the market
@@ -260,7 +260,7 @@ impl GridConfig {
 
         // Calculate quote per level and validate
         if self.grid_levels > 1 {
-            let notional_budget = self.max_investment_quote * self.leverage;
+            let notional_budget = self.notional_budget();
             let quote_per_level = notional_budget / Decimal::from(self.grid_levels - 1);
             if quote_per_level < Decimal::new(20, 0) {
                 errors.push(format!(

@@ -1,0 +1,42 @@
+{
+  "environment": "mainnet",
+  "address": "0x0ecbA0A94c0797bEC6916Bce5094651B8fDD10db",
+  "vault_address": null,
+
+  "strategy_type": "grid",
+
+  "markets": [
+    {
+      "exchange": "hyperliquid",
+      "type": "outcome",
+      "name": "BTC > 79980",
+      "outcome_id": 2,
+      "side": 0,
+      "instrument_meta": {
+        "tick_size": "0.001",
+        "lot_size": "1",
+        "min_qty": "1",
+        "min_notional": "10"
+      }
+    }
+  ],
+
+  "poll_delay_ms": 1000,
+
+  "grid": {
+    "mode": "long",
+    "levels": 2,
+    "start_price": "0.520",
+    "end_price": "0.560",
+    "max_investment_quote": "20",
+    "leverage": "1",
+    "max_leverage": "1",
+    "post_only": false,
+    "stop_loss": null,
+    "take_profit": null,
+    "trailing_up_limit": null,
+    "trailing_down_limit": null
+  },
+
+  "builder_fee": null
+}

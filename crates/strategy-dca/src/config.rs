@@ -130,9 +130,9 @@ impl DCAConfig {
     // Market Accessors - derived from the unified Market enum
     // =========================================================================
 
-    /// Returns true if this is a spot market
+    /// Returns true if this market is spot-like: no margin/leverage.
     pub fn is_spot(&self) -> bool {
-        self.market.is_spot()
+        self.market.is_spot_like()
     }
 
     /// Returns the instrument ID derived from the market

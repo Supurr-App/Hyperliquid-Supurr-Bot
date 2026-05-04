@@ -243,7 +243,7 @@ Every strategy reads from a JSON config:
 
 Supurr has first-class support for Hyperliquid's **prediction markets** (Outcome type) — binary Yes/No event markets where you bet on whether a condition will be true at expiry. Examples: "BTC > 69070", "HYPE > 200".
 
-> **Note:** Prediction markets are currently available on **testnet only**.
+> **Note:** Prediction markets are read from the configured Hyperliquid environment. Mainnet support depends on `outcomeMeta` returning an active market for that environment.
 
 ### How It Works
 
@@ -257,12 +257,14 @@ For example, outcome 516 ("BTC > 69070"):
 - Yes side → asset `100,005,160`
 - No side → asset `100,005,161`
 
+Outcome markets are quoted in `USDH`; keep `USDH` in the spot balance before running a live bot.
+
 ### Configuration
 
 ```json
 {
   "strategy_id": "btc-prediction",
-  "environment": "Testnet",
+  "environment": "mainnet",
   "market": {
     "exchange": "hyperliquid",
     "type": "outcome",
@@ -286,6 +288,7 @@ Prices range from `0` to `1` — representing the probability of the event happe
 Outcome markets integrate seamlessly with the engine — strategies treat them like any other market via the unified `Exchange` trait:
 
 - **Balance queries** use `spotClearinghouseState` (same as spot)
+- **Quote currency** is `USDH`
 - **Fill parsing** uses `-OUTCOME` suffix for instrument IDs
 - **Price lookups** use `#<encoding>` format in `allMids` (e.g., `#5160`)
 - **All strategies** (Grid, DCA, MM) work on Outcome markets with zero code changes

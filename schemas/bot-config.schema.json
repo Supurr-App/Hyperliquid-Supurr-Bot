@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "BotConfig",
-  "description": "V2 Bot configuration - the full config format for all strategies.",
+  "description": "V2 Bot configuration - the full config format for all strategies.\n\nThis is the **schema-generation** version of BotConfig. It uses flat `MarketConfig` structs (for clean JSON Schema output), unlike the engine's `BotConfig` which uses typed `bot_core::Market` enums for runtime parsing.",
   "type": "object",
   "required": [
     "address",
@@ -136,59 +136,35 @@
   },
   "definitions": {
     "ArbitrageConfigJson": {
-      "description": "Arbitrage strategy configuration",
+      "description": "Arbitrage strategy configuration from JSON",
       "type": "object",
       "required": [
         "min_closing_spread_pct",
         "min_opening_spread_pct",
         "order_amount",
-        "perp_instrument",
-        "perp_market_index",
-        "spot_instrument",
-        "spot_market_index"
+        "perp_leverage"
       ],
       "properties": {
         "min_closing_spread_pct": {
-          "description": "Minimum spread to close",
+          "description": "Minimum spread to close (e.g., \"-0.001\" = -0.1%)",
           "type": "string"
         },
         "min_opening_spread_pct": {
-          "description": "Minimum spread to open",
+          "description": "Minimum spread to open (e.g., \"0.003\" = 0.3%)",
           "type": "string"
         },
         "order_amount": {
-          "description": "Order amount in base asset",
-          "type": "string"
-        },
-        "perp_instrument": {
-          "description": "Perp instrument to trade (e.g., \"HYPE\")",
+          "description": "Order amount in quote asset / USDC (e.g., \"100\" = $100 worth)",
           "type": "string"
         },
         "perp_leverage": {
           "description": "Leverage for perp position",
-          "default": "5",
           "type": "string"
-        },
-        "perp_market_index": {
-          "description": "Perp market index",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         },
         "perp_slippage_buffer_pct": {
           "description": "Slippage buffer for perp orders",
           "default": "0.001",
           "type": "string"
-        },
-        "spot_instrument": {
-          "description": "Spot instrument to trade (e.g., \"HYPE-SPOT\")",
-          "type": "string"
-        },
-        "spot_market_index": {
-          "description": "Spot market index",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         },
         "spot_slippage_buffer_pct": {
           "description": "Slippage buffer for spot orders",
@@ -198,7 +174,7 @@
       }
     },
     "BuilderFeeConfig": {
-      "description": "Builder fee configuration",
+      "description": "Builder fee configuration for JSON config",
       "type": "object",
       "required": [
         "address",
@@ -218,7 +194,7 @@
       }
     },
     "DCAConfigJson": {
-      "description": "DCA strategy configuration",
+      "description": "DCA strategy configuration from JSON",
       "type": "object",
       "required": [
         "base_order_size",
@@ -233,7 +209,7 @@
           "type": "string"
         },
         "cooldown_period_secs": {
-          "description": "Cooldown period in seconds between cycles",
+          "description": "Cooldown period in seconds between cycles (default: 60)",
           "default": 60,
           "type": "integer",
           "format": "uint64",
@@ -254,7 +230,7 @@
           "type": "string"
         },
         "leverage": {
-          "description": "Leverage",
+          "description": "Leverage (1 for spot-like)",
           "default": "5",
           "type": "string"
         },
@@ -281,11 +257,11 @@
         },
         "size_multiplier": {
           "description": "Size multiplier for each subsequent DCA order",
-          "default": "1.5",
+          "default": "2.0",
           "type": "string"
         },
         "stop_loss": {
-          "description": "Optional stop loss",
+          "description": "Optional stop loss as absolute PnL threshold (negative value)",
           "default": null,
           "type": [
             "string",
@@ -303,7 +279,7 @@
       }
     },
     "GridConfigJson": {
-      "description": "Grid strategy configuration",
+      "description": "Grid strategy configuration from JSON",
       "type": "object",
       "required": [
         "end_price",
@@ -360,6 +336,22 @@
         },
         "take_profit": {
           "description": "Take profit (optional)",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trailing_down_limit": {
+          "description": "Trailing lower limit price (optional). When set, enables trailing-down: the grid slides down as price falls, until the bottom of the window would go below this floor.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trailing_up_limit": {
+          "description": "Trailing upper limit price (optional). When set, enables trailing-up: the grid slides up as price rises, until the top of the window would exceed this ceiling.",
           "default": null,
           "type": [
             "string",
@@ -444,34 +436,34 @@
       ],
       "properties": {
         "base_order_size": {
-          "description": "Base order size",
+          "description": "Base order size in base asset",
           "type": "string"
         },
         "base_spread": {
-          "description": "Base spread (as decimal, e.g., 0.001 = 0.1%)",
+          "description": "Base spread between bid and ask",
           "type": "string"
         },
         "max_position_size": {
-          "description": "Maximum position size",
+          "description": "Maximum position size in base asset",
           "type": "string"
         },
         "min_price_change_pct": {
-          "description": "Minimum price change to trigger refresh",
+          "description": "Minimum price change to update quotes",
           "default": "0.0005",
           "type": "string"
         },
         "price_skew_gamma": {
-          "description": "Price skew gamma",
+          "description": "Price skew gamma (how aggressively to skew quotes based on position)",
           "default": "0.05",
           "type": "string"
         },
         "size_skew_floor": {
-          "description": "Size skew floor",
+          "description": "Size skew floor (minimum size for quotes)",
           "default": "0.2",
           "type": "string"
         },
         "skew_mode": {
-          "description": "Skew mode: \"both\", \"size\", \"price\", \"none\"",
+          "description": "Skew mode: \"both\", \"size\", \"price\", or \"none\"",
           "default": "both",
           "type": "string"
         },
@@ -494,7 +486,7 @@
       }
     },
     "MarketConfig": {
-      "description": "Market configuration (V2 format)",
+      "description": "Market configuration (V2 format) — flat representation for JSON Schema.\n\nThe engine uses `bot_core::Market` (tagged enum) instead. This flat struct exists so the generated JSON Schema is clean for external consumers.",
       "type": "object",
       "required": [
         "base",
@@ -540,6 +532,24 @@
             }
           ]
         },
+        "name": {
+          "description": "Human-readable outcome name (for prediction markets)",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome_id": {
+          "description": "Outcome ID from outcomeMeta (for prediction markets)",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
         "quote": {
           "description": "Quote asset (e.g., \"USDC\")",
           "default": null,
@@ -548,14 +558,24 @@
             "null"
           ]
         },
+        "side": {
+          "description": "Outcome side: 0 = Yes, 1 = No",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0.0
+        },
         "type": {
-          "description": "Market type: \"perp\", \"spot\", \"hip3\"",
+          "description": "Market type: \"perp\", \"spot\", \"hip3\", or \"outcome\"",
           "type": "string"
         }
       }
     },
     "SyncConfigJson": {
-      "description": "Trade syncer configuration",
+      "description": "Trade syncer configuration for upstream API PnL tracking",
       "type": "object",
       "required": [
         "bot_id",
@@ -563,30 +583,38 @@
       ],
       "properties": {
         "bot_id": {
-          "description": "Bot ID for upstream API",
+          "description": "Bot ID for upstream API (required if enabled)",
           "type": "string"
         },
         "enabled": {
-          "description": "Enable syncing",
+          "description": "Enable syncing (default: true if sync section is present)",
           "default": true,
           "type": "boolean"
         },
         "sync_interval_ms": {
-          "description": "Sync interval in milliseconds",
+          "description": "Sync interval in milliseconds (default: 10000)",
           "default": 10000,
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
         },
+        "sync_secret": {
+          "description": "Optional shared secret sent as x-bot-sync-secret.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "timeout_secs": {
-          "description": "HTTP timeout in seconds",
+          "description": "HTTP timeout in seconds (default: 10)",
           "default": 10,
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
         },
         "upstream_url": {
-          "description": "Upstream API base URL",
+          "description": "Upstream API base URL (e.g., \"https://api.example.com/bot-api\")",
           "type": "string"
         }
       }

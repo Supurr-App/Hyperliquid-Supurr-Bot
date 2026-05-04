@@ -8,7 +8,7 @@
 
 ## TL;DR — What Was Done
 
-Added **prediction market (Outcome)** support across 8 files. Outcomes are HL testnet-only binary event markets. They trade like spot but use asset IDs in the `100,000,000+` range.
+Added **prediction market (Outcome)** support across 8 files. Outcomes are HL binary event markets. They trade like spot but use asset IDs in the `100,000,000+` range.
 
 ---
 
@@ -21,10 +21,11 @@ Added **prediction market (Outcome)** support across 8 files. Outcomes are HL te
 | Coin name (allMids/fills) | `#<encoding>` (e.g. `#5160`) |
 | Token name | `+<encoding>` |
 | Sides | `0` = Yes, `1` = No |
+| Quote currency | `USDH` |
 | Info endpoint | `{"type": "outcomeMeta"}` |
 | Balance query | `spotClearinghouseState` (same as spot) |
 | Leverage | None (spot-like) |
-| Environment | **Testnet only** (`api.hyperliquid-testnet.xyz`) |
+| Environment | Configured Hyperliquid environment; mainnet support requires `outcomeMeta` to return an active market |
 
 ### Example
 
@@ -33,7 +34,7 @@ Market: "BTC > 69070" (outcome 516, side 0 = Yes)
 Encoding: 10 × 516 + 0 = 5160
 Asset ID: 100,005,160
 Coin key in allMids: "#5160"
-Price: 0.4825 (= 48.25% implied probability)
+Price: 0.4825 USDH (= 48.25% implied probability)
 ```
 
 ---
@@ -78,9 +79,10 @@ Price: 0.4825 (= 48.25% implied probability)
 ## Key Design Decisions
 
 1. **Outcome = spot-like**: No leverage, no funding. Uses `spotClearinghouseState` for balances.
-2. **Encoding is the universal key**: `10 * outcome_id + side` maps to asset IDs, coin names, and token names.
-3. **Coin prefix convention**: `#` for outcomes, `@` for spot, bare name for perps — used in fill parsing and price lookups.
-4. **`outcome_params()` accessor on `Market`**: Clean way to extract outcome fields without exposing `HyperliquidMarket` internals to CLI.
+2. **Outcome quote = USDH**: Buying an outcome needs spot `USDH`, not `USDC`.
+3. **Encoding is the universal key**: `10 * outcome_id + side` maps to asset IDs, coin names, and token names.
+4. **Coin prefix convention**: `#` for outcomes, `@` for spot, bare name for perps — used in fill parsing and price lookups.
+5. **`outcome_params()` accessor on `Market`**: Clean way to extract outcome fields without exposing `HyperliquidMarket` internals to CLI.
 
 ---
 

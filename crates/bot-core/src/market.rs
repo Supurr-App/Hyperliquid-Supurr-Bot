@@ -52,6 +52,18 @@ impl Market {
         }
     }
 
+    /// Check if this market settles like spot with no margin/leverage.
+    pub fn is_spot_like(&self) -> bool {
+        match self {
+            Market::Hyperliquid(hl) => hl.is_spot_like(),
+        }
+    }
+
+    /// Check if this market uses margin/leverage.
+    pub fn uses_margin(&self) -> bool {
+        !self.is_spot_like()
+    }
+
     /// Get the base asset (e.g., "BTC", "HYPE").
     pub fn base(&self) -> &str {
         match self {
@@ -150,6 +162,20 @@ impl Market {
             Market::Hyperliquid(hl) => hl.instrument_meta(),
         }
     }
+
+    /// Optional exclusive price bounds for markets with bounded price domains.
+    pub fn price_bounds(&self) -> Option<(Decimal, Decimal)> {
+        match self {
+            Market::Hyperliquid(hl) => hl.price_bounds(),
+        }
+    }
+
+    /// Validate market-specific invariants.
+    pub fn validation_errors(&self) -> Vec<String> {
+        match self {
+            Market::Hyperliquid(hl) => hl.validation_errors(),
+        }
+    }
 }
 
 // =============================================================================
@@ -208,10 +234,10 @@ pub enum HyperliquidMarket {
         instrument_meta: Option<InstrumentMetaConfig>,
     },
 
-    /// Prediction market outcome (testnet-only).
+    /// Prediction market outcome.
     ///
     /// Outcomes trade like spot but use asset ID = 100_000_000 + encoding,
-    /// where encoding = 10 * outcome_id + side.
+    /// where encoding = 10 * outcome_id + side. Live outcome books quote in USDH.
     #[serde(rename = "outcome")]
     Outcome {
         /// Human-readable name (e.g., "BTC > 69070")
@@ -275,6 +301,11 @@ impl HyperliquidMarket {
         matches!(self, Self::Spot { .. })
     }
 
+    /// Check if this market settles like spot with no margin/leverage.
+    pub fn is_spot_like(&self) -> bool {
+        matches!(self, Self::Spot { .. } | Self::Outcome { .. })
+    }
+
     /// Check if this is a prediction market outcome.
     pub fn is_outcome(&self) -> bool {
         matches!(self, Self::Outcome { .. })
@@ -296,7 +327,7 @@ impl HyperliquidMarket {
             Self::Perp { quote, .. } => quote,
             Self::Spot { quote, .. } => quote,
             Self::Hip3 { quote, .. } => quote,
-            Self::Outcome { .. } => "USDC",
+            Self::Outcome { .. } => "USDH",
         }
     }
 
@@ -410,6 +441,101 @@ impl HyperliquidMarket {
             Self::Outcome {
                 instrument_meta, ..
             } => instrument_meta.as_ref(),
+        }
+    }
+
+    /// Optional exclusive price bounds for markets with bounded price domains.
+    pub fn price_bounds(&self) -> Option<(Decimal, Decimal)> {
+        match self {
+            Self::Outcome { .. } => Some((Decimal::ZERO, Decimal::ONE)),
+            _ => None,
+        }
+    }
+
+    /// Validate Hyperliquid market-specific invariants.
+    pub fn validation_errors(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        match self {
+            Self::Perp {
+                base,
+                quote,
+                instrument_meta,
+                ..
+            }
+            | Self::Spot {
+                base,
+                quote,
+                instrument_meta,
+                ..
+            } => {
+                if base.trim().is_empty() {
+                    errors.push("market base must not be empty".to_string());
+                }
+                if quote.trim().is_empty() {
+                    errors.push("market quote must not be empty".to_string());
+                }
+                validate_instrument_meta(instrument_meta.as_ref(), &mut errors);
+            }
+            Self::Hip3 {
+                base,
+                quote,
+                dex,
+                dex_index,
+                instrument_meta,
+                ..
+            } => {
+                if base.trim().is_empty() {
+                    errors.push("HIP3 market base must not be empty".to_string());
+                }
+                if quote.trim().is_empty() {
+                    errors.push("HIP3 market quote must not be empty".to_string());
+                }
+                if dex.trim().is_empty() {
+                    errors.push("HIP3 market dex must not be empty".to_string());
+                }
+                if *dex_index == 0 {
+                    errors.push("HIP3 dex_index must be >= 1".to_string());
+                }
+                validate_instrument_meta(instrument_meta.as_ref(), &mut errors);
+            }
+            Self::Outcome {
+                name,
+                side,
+                instrument_meta,
+                ..
+            } => {
+                if name.trim().is_empty() {
+                    errors.push("Outcome market name must not be empty".to_string());
+                }
+                if *side > 1 {
+                    errors.push("Outcome side must be 0 (Yes) or 1 (No)".to_string());
+                }
+                validate_instrument_meta(instrument_meta.as_ref(), &mut errors);
+            }
+        }
+
+        errors
+    }
+}
+
+fn validate_instrument_meta(meta: Option<&InstrumentMetaConfig>, errors: &mut Vec<String>) {
+    if let Some(meta) = meta {
+        if meta.tick_size <= Decimal::ZERO {
+            errors.push("instrument_meta.tick_size must be > 0".to_string());
+        }
+        if meta.lot_size <= Decimal::ZERO {
+            errors.push("instrument_meta.lot_size must be > 0".to_string());
+        }
+        if let Some(min_qty) = meta.min_qty {
+            if min_qty <= Decimal::ZERO {
+                errors.push("instrument_meta.min_qty must be > 0".to_string());
+            }
+        }
+        if let Some(min_notional) = meta.min_notional {
+            if min_notional <= Decimal::ZERO {
+                errors.push("instrument_meta.min_notional must be > 0".to_string());
+            }
         }
     }
 }
@@ -650,7 +776,7 @@ mod tests {
         assert!(market.is_outcome());
         assert!(!market.is_spot());
         assert_eq!(market.base(), "HYPE > 200");
-        assert_eq!(market.quote(), "USDC");
+        assert_eq!(market.quote(), "USDH");
         assert_eq!(market.spot_coin(), None);
         assert_eq!(market.spot_market_index(), None);
         assert_eq!(market.hip3_config(), None);

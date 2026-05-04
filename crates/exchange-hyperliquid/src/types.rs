@@ -67,9 +67,10 @@ impl Hip3Config {
     }
 }
 
-/// Prediction market outcome configuration (testnet-only).
+/// Prediction market outcome configuration.
 ///
 /// Outcomes are binary event markets. Each outcome has two sides (Yes/No).
+/// Live outcome order books are quoted in USDH.
 /// Asset ID calculation: `100_000_000 + (10 * outcome_id + side)`
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OutcomeConfig {
@@ -95,6 +96,11 @@ impl OutcomeConfig {
     /// Get the coin name used in allMids/fills: `#<encoding>`.
     pub fn coin_name(&self) -> String {
         format!("#{}", self.encoding())
+    }
+
+    /// Get the token name used in spot balances: `+<encoding>`.
+    pub fn token_name(&self) -> String {
+        format!("+{}", self.encoding())
     }
 }
 
@@ -151,7 +157,7 @@ pub struct HyperliquidConfig {
     #[serde(default)]
     pub spot_market_index: Option<u32>,
 
-    /// Whether this is a prediction market outcome (testnet-only).
+    /// Whether this is a prediction market outcome.
     /// When true:
     /// - Balance queries use spotClearinghouseState (same as spot)
     /// - Fill parsing uses -OUTCOME suffix
@@ -172,7 +178,7 @@ impl HyperliquidConfig {
             url
         } else {
             match self.environment {
-                Environment::Mainnet => "http://node.supurr.app",
+                Environment::Mainnet => "https://api.hyperliquid.xyz",
                 Environment::Testnet => "https://api.hyperliquid-testnet.xyz",
             }
         }

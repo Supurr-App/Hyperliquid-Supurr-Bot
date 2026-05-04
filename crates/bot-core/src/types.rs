@@ -415,8 +415,14 @@ impl Fee {
 pub enum InstrumentKind {
     Spot,
     Perp,
-    /// Prediction market outcome (testnet-only)
+    /// Prediction market outcome.
     Outcome,
+}
+
+impl InstrumentKind {
+    pub fn is_spot_like(self) -> bool {
+        matches!(self, Self::Spot | Self::Outcome)
+    }
 }
 
 /// Instrument metadata (provided by you, not discovered)
