@@ -9,6 +9,8 @@
     {
       "exchange": "hyperliquid",
       "type": "outcome",
+      "base": "BTC",
+      "quote": "USDH",
       "name": "BTC > 79980",
       "outcome_id": 2,
       "side": 0,

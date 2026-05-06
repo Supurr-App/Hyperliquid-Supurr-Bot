@@ -9,8 +9,8 @@
 //! For grid strategies with 100 levels, this provides ~10-15x speedup.
 
 use bot_core::{
-    AssetId, ClientOrderId, ExchangeOrderId, Fee, Fill, InstrumentId, OrderSide, Price, Qty, Quote,
-    TradeId,
+    AssetId, ClientOrderId, ExchangeOrderId, Fee, Fill, InstrumentId, InstrumentKind,
+    InstrumentMeta, OrderSide, Price, Qty, Quote, TradeId,
 };
 use rust_decimal::Decimal;
 use std::collections::{HashMap, VecDeque};
@@ -42,6 +42,13 @@ struct OrderGroupKey {
     side: OrderSide,
 }
 
+#[derive(Debug, Clone)]
+struct SimInstrumentAssets {
+    base_asset: AssetId,
+    quote_asset: AssetId,
+    kind: InstrumentKind,
+}
+
 /// Simulates order fills based on quote price crossing.
 ///
 /// Shared logic used by both MockExchange and PaperExchange.
@@ -60,6 +67,7 @@ pub struct FillSimulator {
     order_groups: HashMap<OrderGroupKey, VecDeque<PendingOrder>>,
     next_oid: u64,
     balances: HashMap<AssetId, Decimal>,
+    instrument_assets: HashMap<InstrumentId, SimInstrumentAssets>,
     /// Fee rate to apply to fills (e.g., 0.0004 = 0.04%)
     /// For spot BUY orders, fee is deducted from base asset (received asset)
     /// For spot SELL orders, fee is deducted from quote asset
@@ -72,6 +80,7 @@ impl FillSimulator {
             order_groups: HashMap::new(),
             next_oid: 1000,
             balances: initial_balances,
+            instrument_assets: HashMap::new(),
             fee_rate: Decimal::ZERO, // Default: no fees
         }
     }
@@ -82,6 +91,7 @@ impl FillSimulator {
             order_groups: HashMap::new(),
             next_oid: 1000,
             balances: initial_balances,
+            instrument_assets: HashMap::new(),
             fee_rate,
         }
     }
@@ -91,58 +101,96 @@ impl FillSimulator {
         self.fee_rate = fee_rate;
     }
 
-    /// Calculate fee for a fill
-    /// For spot: BUY = fee in base asset, SELL = fee in quote asset
-    fn calculate_fee(
-        &self,
+    /// Register market metadata so paper/backtest accounting can use the right
+    /// base/quote assets. Outcome markets quote in USDH, not USDC.
+    pub fn register_instrument_meta(&mut self, meta: &InstrumentMeta) {
+        self.instrument_assets.insert(
+            meta.instrument_id.clone(),
+            SimInstrumentAssets {
+                base_asset: meta.base_asset.clone(),
+                quote_asset: meta.quote_asset.clone(),
+                kind: meta.kind,
+            },
+        );
+    }
+
+    pub fn instrument_is_perp(&self, instrument: &InstrumentId) -> bool {
+        self.assets_for(instrument).kind == InstrumentKind::Perp
+    }
+
+    fn assets_for(&self, instrument: &InstrumentId) -> SimInstrumentAssets {
+        Self::assets_for_from(&self.instrument_assets, instrument)
+    }
+
+    fn assets_for_from(
+        instrument_assets: &HashMap<InstrumentId, SimInstrumentAssets>,
         instrument: &InstrumentId,
-        side: OrderSide,
-        qty: Qty,
-        price: Price,
-    ) -> Fee {
-        Self::calculate_fee_static(self.fee_rate, instrument, side, qty, price)
+    ) -> SimInstrumentAssets {
+        if let Some(assets) = instrument_assets.get(instrument) {
+            return assets.clone();
+        }
+
+        let instrument_str = instrument.to_string();
+        let kind = if instrument_str.ends_with("-PERP") {
+            InstrumentKind::Perp
+        } else if instrument_str.ends_with("-OUTCOME") {
+            InstrumentKind::Outcome
+        } else {
+            InstrumentKind::Spot
+        };
+        let quote_asset = if kind == InstrumentKind::Outcome {
+            AssetId::new("USDH")
+        } else {
+            AssetId::new("USDC")
+        };
+        let base_asset = Self::fallback_base_asset(&instrument_str);
+
+        SimInstrumentAssets {
+            base_asset,
+            quote_asset,
+            kind,
+        }
+    }
+
+    fn fallback_base_asset(instrument: &str) -> AssetId {
+        if let Some(pos) = instrument.rfind('-') {
+            AssetId::new(&instrument[..pos])
+        } else {
+            AssetId::new(instrument)
+        }
     }
 
     /// Static version of calculate_fee (for use when self is already borrowed)
     fn calculate_fee_static(
         fee_rate: Decimal,
-        instrument: &InstrumentId,
+        assets: &SimInstrumentAssets,
         side: OrderSide,
         qty: Qty,
         price: Price,
     ) -> Fee {
         if fee_rate == Decimal::ZERO {
-            return Fee::new(Decimal::ZERO, AssetId::new("USDC"));
+            return Fee::new(Decimal::ZERO, assets.quote_asset.clone());
         }
 
-        let instrument_str = instrument.to_string();
-        let is_spot = instrument_str.ends_with("-SPOT");
-
-        if is_spot {
-            let base_asset = if let Some(pos) = instrument_str.rfind('-') {
-                AssetId::new(&instrument_str[..pos])
-            } else {
-                AssetId::new(&instrument_str)
-            };
-
+        if assets.kind.is_spot_like() {
             match side {
                 OrderSide::Buy => {
                     // Spot BUY: fee deducted from received base asset
                     let fee_amount = qty.0 * fee_rate;
-                    Fee::new(fee_amount, base_asset)
+                    Fee::new(fee_amount, assets.base_asset.clone())
                 }
                 OrderSide::Sell => {
-                    // Spot SELL: fee deducted from received quote (USDC)
+                    // Spot/Outcome SELL: fee deducted from received quote asset
                     let notional = qty.0 * price.0;
                     let fee_amount = notional * fee_rate;
-                    Fee::new(fee_amount, AssetId::new("USDC"))
+                    Fee::new(fee_amount, assets.quote_asset.clone())
                 }
             }
         } else {
-            // PERP: fee always in USDC
+            // PERP: fee in the instrument quote asset
             let notional = qty.0 * price.0;
             let fee_amount = notional * fee_rate;
-            Fee::new(fee_amount, AssetId::new("USDC"))
+            Fee::new(fee_amount, assets.quote_asset.clone())
         }
     }
 
@@ -240,6 +288,7 @@ impl FillSimulator {
 
         // Extract fee_rate before mutably borrowing order_groups
         let fee_rate = self.fee_rate;
+        let instrument_assets = self.instrument_assets.clone();
 
         // Process each quote
         for (instrument, quote) in quotes {
@@ -259,9 +308,10 @@ impl FillSimulator {
                 // Using front() for comparison and pop_front() for O(1) removal
                 while orders.front().map(|o| o.price.0 >= ask).unwrap_or(false) {
                     let order = orders.pop_front().unwrap();
+                    let assets = Self::assets_for_from(&instrument_assets, &order.instrument);
                     let fee = Self::calculate_fee_static(
                         fee_rate,
-                        &order.instrument,
+                        &assets,
                         order.side,
                         order.remaining_qty.clone(),
                         order.price.clone(),
@@ -300,9 +350,10 @@ impl FillSimulator {
                 // Using front() for comparison and pop_front() for O(1) removal
                 while orders.front().map(|o| o.price.0 <= bid).unwrap_or(false) {
                     let order = orders.pop_front().unwrap();
+                    let assets = Self::assets_for_from(&instrument_assets, &order.instrument);
                     let fee = Self::calculate_fee_static(
                         fee_rate,
-                        &order.instrument,
+                        &assets,
                         order.side,
                         order.remaining_qty.clone(),
                         order.price.clone(),
@@ -340,24 +391,17 @@ impl FillSimulator {
     /// Also deducts fees from the appropriate asset
     /// NOTE: For PERP instruments, we skip balance updates - Engine's position tracker is source of truth
     fn apply_fill_to_balances(&mut self, fill: &Fill) {
-        let instrument_str = fill.instrument.to_string();
+        let assets = self.assets_for(&fill.instrument);
 
         // For PERP instruments, don't modify balances
         // The Engine's PositionTracker handles PnL tracking
         // This avoids phantom base asset balances (e.g., fake BTC holdings)
-        if instrument_str.ends_with("-PERP") {
+        if assets.kind == InstrumentKind::Perp {
             return;
         }
 
-        // SPOT logic below - unchanged
-        let quote_asset = AssetId::new("USDC");
-
-        // Extract base asset from instrument (e.g., "ETH-USD" -> "ETH")
-        let base_asset = if let Some(pos) = instrument_str.rfind('-') {
-            AssetId::new(&instrument_str[..pos])
-        } else {
-            AssetId::new(&instrument_str)
-        };
+        let quote_asset = assets.quote_asset;
+        let base_asset = assets.base_asset;
 
         let notional = fill.price.0 * fill.qty.0;
 
@@ -401,33 +445,39 @@ impl FillSimulator {
         price: Decimal,
         qty: Decimal,
     ) -> Result<(), String> {
-        let quote_asset = AssetId::new("USDC");
+        let assets = self.assets_for(instrument);
+
+        if assets.kind == InstrumentKind::Perp {
+            return Ok(());
+        }
 
         if side == OrderSide::Buy {
             let required = price * qty;
-            let available = self.balance(&quote_asset);
+            let available = self.balance(&assets.quote_asset);
             if required > available {
                 return Err(format!(
-                    "Insufficient balance: need {} USDC, have {}",
-                    required, available
+                    "Insufficient balance: need {} {}, have {}",
+                    required, assets.quote_asset, available
                 ));
             }
         } else {
-            let instrument_str = instrument.to_string();
-            let base_asset = if let Some(pos) = instrument_str.rfind('-') {
-                AssetId::new(&instrument_str[..pos])
-            } else {
-                AssetId::new(&instrument_str)
-            };
-            let available = self.balance(&base_asset);
+            let available = self.balance(&assets.base_asset);
             if qty > available {
                 return Err(format!(
                     "Insufficient balance: need {} {}, have {}",
-                    qty, base_asset, available
+                    qty, assets.base_asset, available
                 ));
             }
         }
         Ok(())
+    }
+
+    /// Apply a known fill to simulated spot-like balances.
+    ///
+    /// IOC fills are constructed by PaperExchange directly, while resting fills
+    /// come through `check_fills`.
+    pub fn apply_fill(&mut self, fill: &Fill) {
+        self.apply_fill_to_balances(fill);
     }
 
     /// Get pending orders count (sum across all groups)
@@ -450,6 +500,8 @@ impl Default for FillSimulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bot_core::MarketIndex;
+    use rust_decimal_macros::dec;
 
     fn make_quote(instrument: &str, bid: i64, ask: i64) -> Quote {
         Quote {
@@ -459,6 +511,21 @@ mod tests {
             bid_size: Qty::new(Decimal::new(10, 0)),
             ask_size: Qty::new(Decimal::new(10, 0)),
             ts: 0,
+        }
+    }
+
+    fn outcome_meta() -> InstrumentMeta {
+        InstrumentMeta {
+            instrument_id: InstrumentId::new("#20-OUTCOME"),
+            market_index: MarketIndex::new(100_000_020),
+            base_asset: AssetId::new("BTC > 79980"),
+            quote_asset: AssetId::new("USDH"),
+            tick_size: dec!(0.001),
+            lot_size: dec!(1),
+            min_qty: Some(dec!(1)),
+            min_notional: Some(dec!(10)),
+            fee_asset_default: Some(AssetId::new("USDH")),
+            kind: InstrumentKind::Outcome,
         }
     }
 
@@ -523,5 +590,45 @@ mod tests {
         let fills = sim.check_fills(&quotes, 1000);
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].fill.price.0, Decimal::new(50000, 0));
+    }
+
+    #[test]
+    fn test_outcome_buy_uses_usdh_quote_balance() {
+        let mut balances = HashMap::new();
+        balances.insert(AssetId::new("USDH"), dec!(100));
+
+        let mut sim = FillSimulator::new(balances);
+        sim.register_instrument_meta(&outcome_meta());
+
+        sim.add_pending_order(PendingOrder {
+            client_id: ClientOrderId::new("outcome-buy"),
+            exchange_order_id: ExchangeOrderId::new("ex-outcome-buy"),
+            instrument: InstrumentId::new("#20-OUTCOME"),
+            side: OrderSide::Buy,
+            price: Price::new(dec!(0.46)),
+            qty: Qty::new(dec!(10)),
+            remaining_qty: Qty::new(dec!(10)),
+            created_at: 0,
+        });
+
+        let mut quotes = HashMap::new();
+        quotes.insert(
+            InstrumentId::new("#20-OUTCOME"),
+            Quote {
+                instrument: InstrumentId::new("#20-OUTCOME"),
+                bid: Price::new(dec!(0.458)),
+                ask: Price::new(dec!(0.459)),
+                bid_size: Qty::new(dec!(1000)),
+                ask_size: Qty::new(dec!(1000)),
+                ts: 0,
+            },
+        );
+
+        let fills = sim.check_fills(&quotes, 1000);
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].fill.fee.asset, AssetId::new("USDH"));
+        assert_eq!(sim.balance(&AssetId::new("USDH")), dec!(95.4));
+        assert_eq!(sim.balance(&AssetId::new("BTC > 79980")), dec!(10));
+        assert_eq!(sim.balance(&AssetId::new("USDC")), Decimal::ZERO);
     }
 }

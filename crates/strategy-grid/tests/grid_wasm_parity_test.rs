@@ -386,11 +386,13 @@ async fn test_grid_trending_market_position_accumulates() {
     // PaperExchange only fills orders when price CROSSES the order price
     let mut balances = HashMap::new();
     balances.insert(AssetId::new("USDC"), dec!(100000));
-    let paper_exchange = Arc::new(bot_engine::testing::create_standalone_paper_exchange_with_id(
-        balances,
-        "hyperliquid",
-        Environment::Testnet,
-    ));
+    let paper_exchange = Arc::new(
+        bot_engine::testing::create_standalone_paper_exchange_with_id(
+            balances,
+            "hyperliquid",
+            Environment::Testnet,
+        ),
+    );
 
     paper_exchange.queue_quotes(quotes).await;
 

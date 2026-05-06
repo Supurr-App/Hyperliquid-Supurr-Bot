@@ -32,9 +32,11 @@
 //! ```
 
 use anyhow::{Context, Result};
-use bot_core::{AssetId, InstrumentId, InstrumentMeta, Price, Qty, Quote};
+use bot_core::{AssetId, InstrumentId, InstrumentKind, Price, Qty, Quote};
 use bot_engine::testing::{create_standalone_paper_exchange_with_id, ArcExchange, PaperExchange};
-use bot_engine::{build_strategy, BotConfig, Engine, EngineConfig, TradeSyncerConfig};
+use bot_engine::{
+    build_instrument_metas, build_strategy, BotConfig, Engine, EngineConfig, TradeSyncerConfig,
+};
 use exchange_hyperliquid::{
     new_client_with_registration, BuilderFee, Hip3Config, HyperliquidConfig, OutcomeConfig,
 };
@@ -154,6 +156,118 @@ EXAMPLE:
     cargo grid-dry
 "#
     );
+}
+
+fn seeded_sim_balances(
+    instrument_metas: &[bot_core::InstrumentMeta],
+    starting_balance: Decimal,
+) -> std::collections::HashMap<AssetId, Decimal> {
+    let mut balances = std::collections::HashMap::new();
+
+    // Preserve old behavior for native markets, while letting outcome/HIP-3
+    // quote currencies use their own balance bucket.
+    balances.insert(AssetId::new("USDC"), starting_balance);
+    balances.insert(AssetId::new("USDH"), starting_balance);
+
+    for meta in instrument_metas {
+        balances
+            .entry(meta.quote_asset.clone())
+            .or_insert(starting_balance);
+    }
+
+    balances
+}
+
+fn seeded_backtest_balances(
+    config: &BotConfig,
+    instrument_metas: &[bot_core::InstrumentMeta],
+    starting_balance: Decimal,
+) -> std::collections::HashMap<AssetId, Decimal> {
+    let mut balances = seeded_sim_balances(instrument_metas, starting_balance);
+    seed_spot_like_sell_inventory(config, instrument_metas, &mut balances);
+    balances
+}
+
+fn seed_spot_like_sell_inventory(
+    config: &BotConfig,
+    instrument_metas: &[bot_core::InstrumentMeta],
+    balances: &mut std::collections::HashMap<AssetId, Decimal>,
+) {
+    let Some(grid) = config.grid.as_ref() else {
+        return;
+    };
+
+    let mode = grid.mode.to_lowercase();
+    if mode != "short" && mode != "neutral" {
+        return;
+    }
+
+    let Ok(start_price) = Decimal::from_str(&grid.start_price) else {
+        return;
+    };
+    let Ok(end_price) = Decimal::from_str(&grid.end_price) else {
+        return;
+    };
+    let Ok(max_investment_quote) = Decimal::from_str(&grid.max_investment_quote) else {
+        return;
+    };
+
+    let min_price = if start_price < end_price {
+        start_price
+    } else {
+        end_price
+    };
+    if min_price <= Decimal::ZERO {
+        return;
+    }
+
+    let seed_qty = max_investment_quote / min_price;
+    for meta in instrument_metas
+        .iter()
+        .filter(|meta| meta.kind.is_spot_like())
+    {
+        balances
+            .entry(meta.base_asset.clone())
+            .and_modify(|existing| {
+                if *existing < seed_qty {
+                    *existing = seed_qty;
+                }
+            })
+            .or_insert(seed_qty);
+    }
+}
+
+fn backtest_spread(meta: &bot_core::InstrumentMeta) -> Decimal {
+    if meta.kind == InstrumentKind::Outcome {
+        meta.tick_size
+    } else {
+        dec!(1.0)
+    }
+}
+
+fn quote_from_backtest_price(
+    instrument: &InstrumentId,
+    meta: &bot_core::InstrumentMeta,
+    price: Decimal,
+    ts: i64,
+) -> Quote {
+    let half_spread = backtest_spread(meta) / dec!(2);
+    let mut bid = price - half_spread;
+    let mut ask = price + half_spread;
+
+    if meta.kind == InstrumentKind::Outcome {
+        bid = bid.clamp(dec!(0), dec!(1));
+        ask = ask.clamp(dec!(0), dec!(1));
+    }
+
+    Quote {
+        instrument: instrument.clone(),
+        bid: Price::new(bid),
+        ask: Price::new(ask),
+        bid_size: Qty::new(dec!(1000)),
+        ask_size: Qty::new(dec!(1000)),
+        ts,
+    }
 }
 
 #[tokio::main]
@@ -313,6 +427,12 @@ async fn main() -> Result<()> {
     // - Paper: wrap real exchange in PaperExchange for simulated fills (uses real quotes)
     // - Backtest: use standalone PaperExchange with pre-loaded historical prices
     let sim_config = config.effective_simulation_config();
+    let instrument_metas = build_instrument_metas(&config);
+    let primary_instrument_meta = instrument_metas
+        .first()
+        .cloned()
+        .context("No markets configured")?;
+
     let (exchange, backtest_paper): (Arc<dyn bot_core::Exchange>, Option<Arc<PaperExchange<_>>>) =
         match &trading_mode {
             TradingMode::Paper => {
@@ -321,11 +441,10 @@ async fn main() -> Result<()> {
                     .unwrap_or(Decimal::new(10_000, 0));
                 let fee_rate = Decimal::from_str(&sim_config.fee_rate).unwrap_or(dec!(0.00025));
 
-                let mut initial_balances = std::collections::HashMap::new();
-                initial_balances.insert(AssetId::new("USDC"), starting_balance);
-                initial_balances.insert(AssetId::new("USDH"), starting_balance);
+                let initial_balances = seeded_sim_balances(&instrument_metas, starting_balance);
                 let wrapped_exchange = ArcExchange::new(real_exchange);
                 let paper = Arc::new(PaperExchange::new(wrapped_exchange, initial_balances));
+                paper.register_instrument_metas(&instrument_metas).await;
                 paper.set_fee_rate(fee_rate).await;
 
                 tracing::info!(
@@ -380,14 +499,15 @@ async fn main() -> Result<()> {
                 tracing::info!("Loaded {} historical prices", prices_file.prices.len());
 
                 // Create standalone paper exchange with "hyperliquid" ID for strategy compatibility
-                let mut initial_balances = std::collections::HashMap::new();
-                initial_balances.insert(AssetId::new("USDC"), starting_balance);
+                let initial_balances =
+                    seeded_backtest_balances(&config, &instrument_metas, starting_balance);
                 let paper = Arc::new(create_standalone_paper_exchange_with_id(
                     initial_balances,
                     "hyperliquid",
                     config.parse_environment(),
                 ));
 
+                paper.register_instrument_metas(&instrument_metas).await;
                 paper.set_fee_rate(fee_rate).await;
 
                 tracing::info!(
@@ -412,21 +532,17 @@ async fn main() -> Result<()> {
 
                 // Convert prices to quotes and queue them
                 let instrument = config.instrument_id();
-                let spread = dec!(1.0); // $1 spread for simulation
                 let quotes: Vec<Quote> = prices_file
                     .prices
                     .iter()
                     .filter_map(|p| {
                         let price = Decimal::from_str(&p.price).ok()?;
-                        let half_spread = spread / dec!(2);
-                        Some(Quote {
-                            instrument: instrument.clone(),
-                            bid: Price::new(price - half_spread),
-                            ask: Price::new(price + half_spread),
-                            bid_size: Qty::new(dec!(1000)),
-                            ask_size: Qty::new(dec!(1000)),
-                            ts: p.ts,
-                        })
+                        Some(quote_from_backtest_price(
+                            &instrument,
+                            &primary_instrument_meta,
+                            price,
+                            p.ts,
+                        ))
                     })
                     .collect();
 
@@ -441,78 +557,24 @@ async fn main() -> Result<()> {
     // Note: register_user() is called later, after strategy is registered,
     // so we can check sync_mechanism()
 
-    // Determine instrument kind based on config
-    let instrument_kind = config.primary_market().instrument_kind();
-
-    // Register instrument metadata (derived from primary market)
-    let primary_market = config.primary_market();
-
-    // Extract instrument_meta from Market, use defaults if not provided
-    let (tick_size, lot_size, min_qty, min_notional) = primary_market
-        .instrument_meta()
-        .map(|im| (im.tick_size, im.lot_size, im.min_qty, im.min_notional))
-        .unwrap_or((Decimal::new(1, 1), Decimal::new(1, 4), None, None));
-
-    // # simplify, engine shouldn't care about Exchange's market things
-    let quote_currency = primary_market.quote();
-    let instrument_meta = InstrumentMeta {
-        instrument_id: config.instrument_id(),
-        market_index: config.market_index(),
-        base_asset: AssetId::new(primary_market.base()),
-        quote_asset: AssetId::new(primary_market.quote()),
-        tick_size,
-        lot_size,
-        min_qty,
-        min_notional,
-        fee_asset_default: Some(AssetId::new(quote_currency)),
-        kind: instrument_kind,
-    };
-
     // Create engine
     let mut engine = Engine::new(EngineConfig::default());
     engine.register_exchange(exchange.clone());
 
     // Register instruments — multi-market strategies (arb) need all markets,
     // single-market strategies use the primary instrument.
-    let instruments: Vec<InstrumentId> = if config.markets.len() > 1 {
-        // Multi-market strategy: register every market in the array
-        let mut ids = Vec::new();
-        for market in &config.markets {
-            let quote_currency = market.quote();
-            let (tick_size, lot_size, min_qty, min_notional) = market
-                .instrument_meta()
-                .map(|im| (im.tick_size, im.lot_size, im.min_qty, im.min_notional))
-                .unwrap_or((Decimal::new(1, 1), Decimal::new(1, 4), None, None));
+    let mut instruments = Vec::new();
+    for meta in &instrument_metas {
+        tracing::info!(
+            "Registering instrument {} (index {:?}, kind={:?})",
+            meta.instrument_id,
+            meta.market_index,
+            meta.kind,
+        );
 
-            let meta = InstrumentMeta {
-                instrument_id: market.instrument_id(),
-                market_index: market.market_index(),
-                base_asset: AssetId::new(market.base()),
-                quote_asset: AssetId::new(quote_currency),
-                tick_size,
-                lot_size,
-                min_qty,
-                min_notional,
-                fee_asset_default: Some(AssetId::new(quote_currency)),
-                kind: market.instrument_kind(),
-            };
-
-            tracing::info!(
-                "Registering instrument {} (index {:?}, kind={:?})",
-                meta.instrument_id,
-                meta.market_index,
-                meta.kind,
-            );
-
-            ids.push(meta.instrument_id.clone());
-            // # simplify, why register meta? its overcomplicating stuff.
-            engine.register_instrument(meta);
-        }
-        ids
-    } else {
-        engine.register_instrument(instrument_meta.clone());
-        vec![instrument_meta.instrument_id.clone()]
-    };
+        instruments.push(meta.instrument_id.clone());
+        engine.register_instrument(meta.clone());
+    }
 
     // Register the strategy (already boxed above)
     engine.register_strategy(strategy_box);
