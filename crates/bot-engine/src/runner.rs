@@ -58,6 +58,18 @@ pub struct BacktestFill {
     pub fee_currency: String,
 }
 
+/// Final position and PnL summary for one tracked instrument.
+#[derive(Debug, Clone, Serialize)]
+pub struct BacktestPositionSummary {
+    pub instrument: String,
+    pub final_position_qty: String,
+    pub avg_entry_price: Option<String>,
+    pub realized_pnl: String,
+    pub unrealized_pnl: Option<String>,
+    pub total_fees: String,
+    pub net_pnl: String,
+}
+
 /// Backtest result summary for JSON output
 #[derive(Debug, Clone, Serialize)]
 pub struct BacktestResult {
@@ -74,6 +86,8 @@ pub struct BacktestResult {
     pub total_fees: String,
     pub total_volume: String,
     pub net_pnl: String,
+    #[serde(default)]
+    pub positions: Vec<BacktestPositionSummary>,
     pub exit_reason: Option<String>,
 }
 
@@ -289,9 +303,9 @@ impl EngineRunner {
     /// Call after run() completes to get summary statistics.
     pub fn get_backtest_results(&self, instrument: &InstrumentId) -> BacktestResult {
         let fills = self.engine.get_fills();
-        let position = self.engine.position(instrument);
         let positions = self.tracked_positions();
         let metrics_snapshot = self.performance_tracker.snapshot(fills, &positions);
+        let primary_position = self.engine.position(instrument);
 
         // Compute volume from fills
         let mut total_volume = Decimal::ZERO;
@@ -300,9 +314,32 @@ impl EngineRunner {
             total_volume += notional;
         }
 
-        // Compute net PnL
-        let net_pnl = position.realized_pnl + position.unrealized_pnl.unwrap_or(Decimal::ZERO)
-            - position.total_fees;
+        let total_realized_pnl: Decimal = positions.iter().map(|p| p.realized_pnl).sum();
+        let total_unrealized_pnl: Decimal = positions
+            .iter()
+            .map(|p| p.unrealized_pnl.unwrap_or_default())
+            .sum();
+        let total_fees: Decimal = positions.iter().map(|p| p.total_fees).sum();
+        let total_net_pnl: Decimal = positions.iter().map(Position::current_pnl).sum();
+        let unrealized_pnl = positions
+            .iter()
+            .any(|p| p.unrealized_pnl.is_some())
+            .then_some(total_unrealized_pnl);
+
+        let position_summaries: Vec<BacktestPositionSummary> = self
+            .instruments
+            .iter()
+            .zip(positions.iter())
+            .map(|(instrument, position)| BacktestPositionSummary {
+                instrument: instrument.to_string(),
+                final_position_qty: position.qty.to_string(),
+                avg_entry_price: position.avg_entry_px.map(|p| p.0.to_string()),
+                realized_pnl: position.realized_pnl.to_string(),
+                unrealized_pnl: position.unrealized_pnl.map(|p| p.to_string()),
+                total_fees: position.total_fees.to_string(),
+                net_pnl: position.current_pnl().to_string(),
+            })
+            .collect();
 
         // Convert fills to serializable format
         let backtest_fills: Vec<BacktestFill> = fills
@@ -325,13 +362,14 @@ impl EngineRunner {
             benchmark: metrics_snapshot.benchmark,
             equity_curve: self.performance_tracker.equity_curve(),
             closed_trades: self.performance_tracker.closed_trades(fills),
-            final_position_qty: position.qty.to_string(),
-            avg_entry_price: position.avg_entry_px.map(|p| p.0.to_string()),
-            realized_pnl: position.realized_pnl.to_string(),
-            unrealized_pnl: position.unrealized_pnl.map(|p| p.to_string()),
-            total_fees: position.total_fees.to_string(),
+            final_position_qty: primary_position.qty.to_string(),
+            avg_entry_price: primary_position.avg_entry_px.map(|p| p.0.to_string()),
+            realized_pnl: total_realized_pnl.to_string(),
+            unrealized_pnl: unrealized_pnl.map(|p| p.to_string()),
+            total_fees: total_fees.to_string(),
             total_volume: total_volume.to_string(),
-            net_pnl: net_pnl.to_string(),
+            net_pnl: total_net_pnl.to_string(),
+            positions: position_summaries,
             exit_reason: self.shutdown_reason.clone(),
         }
     }
@@ -665,38 +703,75 @@ impl EngineRunner {
             if now_ms - self.stats.last_meta_log_ms >= 30_000 {
                 self.stats.last_meta_log_ms = now_ms;
 
-                // Build position string for all instruments
-                let pos_str: String = self
+                let positions: Vec<(InstrumentId, Position)> = self
                     .instruments
                     .iter()
-                    .map(|i| {
-                        let p = self.engine.position(i);
-                        format!("{}:{:.4}", i, p.qty)
-                    })
+                    .map(|i| (i.clone(), self.engine.position(i)))
+                    .collect();
+
+                let pos_str = positions
+                    .iter()
+                    .map(|(instrument, position)| format!("{}:{:.4}", instrument, position.qty))
                     .collect::<Vec<_>>()
                     .join("/");
 
-                let total_upnl: rust_decimal::Decimal = self
-                    .instruments
+                let pos_detail_str = positions
                     .iter()
-                    .map(|i| self.engine.position(i).unrealized_pnl.unwrap_or_default())
+                    .map(|(instrument, position)| {
+                        let avg = position
+                            .avg_entry_px
+                            .map(|price| price.0.to_string())
+                            .unwrap_or_else(|| "-".to_string());
+                        let unrealized = position.unrealized_pnl.unwrap_or_default();
+                        format!(
+                            "{}[qty={:.4},avg={},r_pnl={:.4},u_pnl={:.4},net={:.4}]",
+                            instrument,
+                            position.qty,
+                            avg,
+                            position.realized_pnl,
+                            unrealized,
+                            position.current_pnl()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+
+                let total_realized_pnl: Decimal =
+                    positions.iter().map(|(_, p)| p.realized_pnl).sum();
+                let total_unrealized_pnl: Decimal = positions
+                    .iter()
+                    .map(|(_, p)| p.unrealized_pnl.unwrap_or_default())
                     .sum();
+                let total_position_fees: Decimal =
+                    positions.iter().map(|(_, p)| p.total_fees).sum();
+                let total_net_pnl: Decimal = positions.iter().map(|(_, p)| p.current_pnl()).sum();
 
                 let sync_mechanism = self.engine.sync_mechanism();
                 if sync_mechanism == bot_core::SyncMechanism::Poll {
                     // Poll mode: full stats
                     tracing::info!(
-                        "[META] pos={} orders={}/{} vol={:.2} fees={:.4} u_pnl={:.4}",
+                        "[META] pos={} orders_placed={} orders_filled={} vol={:.2} fees={:.4} r_pnl={:.4} u_pnl={:.4} net_pnl={:.4} legs={}",
                         pos_str,
                         self.stats.orders_placed,
                         self.stats.orders_filled,
                         self.stats.volume_traded,
                         self.stats.total_fees,
-                        total_upnl
+                        total_realized_pnl,
+                        total_unrealized_pnl,
+                        total_net_pnl,
+                        pos_detail_str
                     );
                 } else {
                     // Snapshot mode: just position
-                    tracing::info!("[META] pos={} u_pnl={:.4} (snapshot)", pos_str, total_upnl);
+                    tracing::info!(
+                        "[META] pos={} r_pnl={:.4} u_pnl={:.4} fees={:.4} net_pnl={:.4} legs={} (snapshot)",
+                        pos_str,
+                        total_realized_pnl,
+                        total_unrealized_pnl,
+                        total_position_fees,
+                        total_net_pnl,
+                        pos_detail_str
+                    );
                 }
             }
 
@@ -1775,6 +1850,11 @@ mod tests {
         assert_eq!(result.metrics.total_fees, "2");
         assert_eq!(result.metrics.total_volume, "210");
         assert_eq!(result.metrics.net_pnl, "8");
+        assert_eq!(result.realized_pnl, "10");
+        assert_eq!(result.net_pnl, "8");
+        assert_eq!(result.positions.len(), 1);
+        assert_eq!(result.positions[0].instrument, "BTC-PERP");
+        assert_eq!(result.positions[0].net_pnl, "8");
         assert_eq!(result.metrics.period_return_pct, Some(0.8));
         assert_eq!(result.metrics.max_drawdown_usdc, "1");
         assert_eq!(result.metrics.max_drawdown_pct, Some(0.1));
@@ -1796,6 +1876,97 @@ mod tests {
             Some("1008".to_string())
         );
         assert_eq!(result.benchmark.instrument, Some("BTC-PERP".to_string()));
+    }
+
+    #[test]
+    fn backtest_result_aggregates_multi_instrument_pnl() {
+        let yes = InstrumentId::new("#50-OUTCOME");
+        let no = InstrumentId::new("#51-OUTCOME");
+        let mut engine = Engine::new(EngineConfig::default());
+        engine.register_instrument(instrument_meta(&yes));
+        engine.register_instrument(instrument_meta(&no));
+
+        let mut runner = EngineRunner::new(
+            engine,
+            RunnerConfig {
+                metrics_mode: "backtest".to_string(),
+                metrics_starting_balance_usdc: Some(dec!(100)),
+                cleanup_delay_ms: 0,
+                ..Default::default()
+            },
+        );
+        runner.add_instrument(yes.clone());
+        runner.add_instrument(no.clone());
+
+        record_backtest_fill(
+            &mut runner,
+            &yes,
+            OrderSide::Buy,
+            dec!(1),
+            dec!(10),
+            Decimal::ZERO,
+            1,
+            "yes-open",
+        );
+        record_backtest_fill(
+            &mut runner,
+            &yes,
+            OrderSide::Sell,
+            dec!(2),
+            dec!(5),
+            Decimal::ZERO,
+            2,
+            "yes-partial-close",
+        );
+        record_backtest_fill(
+            &mut runner,
+            &no,
+            OrderSide::Buy,
+            dec!(4),
+            dec!(10),
+            Decimal::ZERO,
+            3,
+            "no-open",
+        );
+        record_backtest_fill(
+            &mut runner,
+            &no,
+            OrderSide::Sell,
+            dec!(5),
+            dec!(10),
+            Decimal::ZERO,
+            4,
+            "no-close",
+        );
+        record_backtest_equity(&mut runner, &yes, dec!(3), 5);
+        record_backtest_equity(&mut runner, &no, dec!(5), 5);
+
+        let result = runner.get_backtest_results(&yes);
+
+        assert_eq!(result.realized_pnl, "15");
+        assert_eq!(result.unrealized_pnl, Some("10".to_string()));
+        assert_eq!(result.net_pnl, "25");
+        assert_eq!(result.positions.len(), 2);
+
+        let yes_position = result
+            .positions
+            .iter()
+            .find(|position| position.instrument == "#50-OUTCOME")
+            .expect("yes position summary");
+        assert_eq!(yes_position.final_position_qty, "5");
+        assert_eq!(yes_position.realized_pnl, "5");
+        assert_eq!(yes_position.unrealized_pnl, Some("10".to_string()));
+        assert_eq!(yes_position.net_pnl, "15");
+
+        let no_position = result
+            .positions
+            .iter()
+            .find(|position| position.instrument == "#51-OUTCOME")
+            .expect("no position summary");
+        assert_eq!(no_position.final_position_qty, "0");
+        assert_eq!(no_position.realized_pnl, "10");
+        assert_eq!(no_position.unrealized_pnl, None);
+        assert_eq!(no_position.net_pnl, "10");
     }
 
     #[tokio::test]

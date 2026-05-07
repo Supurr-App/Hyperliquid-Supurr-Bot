@@ -7,7 +7,11 @@
 //! - `build_instrument_meta()` — construct InstrumentMeta from Market
 
 use anyhow::{Context, Result};
-use bot_core::{AssetId, Environment, InstrumentId, InstrumentMeta, Market, Strategy, StrategyId};
+use bot_core::{
+    AssetId, Environment, HyperliquidMarket, InstrumentId, InstrumentMeta, Market, Strategy,
+    StrategyId,
+};
+use bot_orchestrator::{BotOrchestrator, GroupRiskConfig, OrchestratorLeg};
 use rust_decimal::Decimal;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -69,6 +73,11 @@ pub struct BotConfig {
     #[serde(default)]
     pub vault_address: Option<String>,
 
+    /// Optional Hyperliquid base URL override.
+    /// When set, both /info and /exchange requests use this gateway.
+    #[serde(default)]
+    pub base_url_override: Option<String>,
+
     /// Strategy type: "grid", "mm", "dca", or "arbitrage"
     pub strategy_type: String,
 
@@ -97,6 +106,10 @@ pub struct BotConfig {
     /// Arbitrage strategy configuration
     #[serde(default)]
     pub arbitrage: Option<ArbitrageConfigJson>,
+
+    /// Parent strategy configuration for grouped child strategies.
+    #[serde(default)]
+    pub orchestrator: Option<OrchestratorConfigJson>,
 
     // -------------------------------------------------------------------------
     // Common config
@@ -314,6 +327,13 @@ impl BotConfig {
                 .and_then(|grid| Decimal::from_str(&grid.max_investment_quote).ok());
         }
 
+        if strategy_type == "orchestrator" {
+            return self
+                .grid
+                .as_ref()
+                .and_then(|grid| Decimal::from_str(&grid.max_investment_quote).ok());
+        }
+
         if strategy_type == "arbitrage" || strategy_type == "arb" {
             return self
                 .arbitrage
@@ -513,6 +533,47 @@ pub struct DCAConfigJson {
 }
 
 // =============================================================================
+// Orchestrator Config
+// =============================================================================
+
+/// Parent strategy configuration for grouped child strategies.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OrchestratorConfigJson {
+    /// V1 kind: "prediction_yes_no_grid"
+    #[serde(default = "default_orchestrator_kind")]
+    pub kind: String,
+    /// Static allocation mode for child legs. V1 supports "static_50_50".
+    #[serde(default = "default_allocation_mode")]
+    pub allocation_mode: String,
+    /// Group take-profit threshold in percentage units. Example: "10" = +10%.
+    #[serde(default)]
+    pub take_profit_pct: Option<String>,
+    /// Group stop-loss threshold in percentage units. Example: "5" = -5%.
+    #[serde(default)]
+    pub stop_loss_pct: Option<String>,
+    /// Explicit child-leg ranges supplied by the client from live prices.
+    #[serde(default)]
+    pub legs: Vec<OrchestratorLegConfigJson>,
+}
+
+/// Per-leg range override for orchestrated child strategies.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OrchestratorLegConfigJson {
+    /// Outcome side: 0 = Yes, 1 = No
+    pub side: u8,
+    /// Child grid start price for this side.
+    pub start_price: String,
+    /// Child grid end price for this side.
+    pub end_price: String,
+    /// Optional child trailing ceiling for this side.
+    #[serde(default)]
+    pub trailing_up_limit: Option<String>,
+    /// Optional child trailing floor for this side.
+    #[serde(default)]
+    pub trailing_down_limit: Option<String>,
+}
+
+// =============================================================================
 // Common Config Structs
 // =============================================================================
 
@@ -631,6 +692,14 @@ fn default_poll_delay_ms() -> u64 {
     500
 }
 
+fn default_orchestrator_kind() -> String {
+    "prediction_yes_no_grid".to_string()
+}
+
+fn default_allocation_mode() -> String {
+    "static_50_50".to_string()
+}
+
 fn default_skew_mode() -> String {
     "both".to_string()
 }
@@ -648,6 +717,183 @@ fn default_min_price_change_pct() -> String {
 // Strategy Builder
 // =============================================================================
 
+fn outcome_side_label(side: u8) -> &'static str {
+    match side {
+        0 => "yes",
+        1 => "no",
+        _ => "unknown",
+    }
+}
+
+fn opposite_outcome_market(market: &Market) -> Result<Market> {
+    match market {
+        Market::Hyperliquid(HyperliquidMarket::Outcome {
+            name,
+            outcome_id,
+            side,
+            instrument_meta,
+        }) => {
+            let opposite_side = if *side == 0 { 1 } else { 0 };
+            Ok(Market::Hyperliquid(HyperliquidMarket::Outcome {
+                name: name.clone(),
+                outcome_id: *outcome_id,
+                side: opposite_side,
+                instrument_meta: instrument_meta.clone(),
+            }))
+        }
+        _ => anyhow::bail!("prediction_yes_no_grid orchestrator requires an outcome market"),
+    }
+}
+
+fn orchestrator_markets(config: &BotConfig) -> Result<Vec<Market>> {
+    let strategy_type = config.strategy_type.to_lowercase();
+    if strategy_type != "orchestrator" {
+        return Ok(config.markets.clone());
+    }
+
+    anyhow::ensure!(
+        config.markets.len() == 1,
+        "Orchestrator V1 expects exactly one configured market; it mirrors the opposite outcome side internally"
+    );
+
+    let primary = config.primary_market().clone();
+    let opposite = opposite_outcome_market(&primary)?;
+    Ok(vec![primary, opposite])
+}
+
+fn grid_mode_from_json(mode: &str) -> GridMode {
+    match mode.to_lowercase().as_str() {
+        "short" => GridMode::Short,
+        "neutral" => GridMode::Neutral,
+        _ => GridMode::Long,
+    }
+}
+
+fn build_grid_config_for_market(
+    config: &BotConfig,
+    grid_json: &GridConfigJson,
+    market: Market,
+    strategy_id: StrategyId,
+    allocation_override: Option<Decimal>,
+    force_long: bool,
+    disable_child_exits: bool,
+) -> Result<GridConfig> {
+    Ok(GridConfig {
+        strategy_id,
+        environment: config.parse_environment(),
+        market,
+        grid_mode: if force_long {
+            GridMode::Long
+        } else {
+            grid_mode_from_json(&grid_json.mode)
+        },
+        grid_levels: grid_json.levels,
+        start_price: Decimal::from_str(&grid_json.start_price).context("Invalid start_price")?,
+        end_price: Decimal::from_str(&grid_json.end_price).context("Invalid end_price")?,
+        max_investment_quote: match allocation_override {
+            Some(value) => value,
+            None => Decimal::from_str(&grid_json.max_investment_quote)
+                .context("Invalid max_investment_quote")?,
+        },
+        base_order_size: Decimal::new(1, 3),
+        leverage: Decimal::from_str(&grid_json.leverage).context("Invalid leverage")?,
+        max_leverage: Decimal::from_str(&grid_json.max_leverage).context("Invalid max_leverage")?,
+        post_only: grid_json.post_only,
+        stop_loss: if disable_child_exits {
+            None
+        } else {
+            grid_json
+                .stop_loss
+                .as_ref()
+                .map(|s| Decimal::from_str(s))
+                .transpose()
+                .context("Invalid grid stop_loss")?
+        },
+        take_profit: if disable_child_exits {
+            None
+        } else {
+            grid_json
+                .take_profit
+                .as_ref()
+                .map(|s| Decimal::from_str(s))
+                .transpose()
+                .context("Invalid grid take_profit")?
+        },
+        trailing_up_limit: grid_json
+            .trailing_up_limit
+            .as_ref()
+            .map(|s| Decimal::from_str(s))
+            .transpose()
+            .context("Invalid grid trailing_up_limit")?,
+        trailing_down_limit: grid_json
+            .trailing_down_limit
+            .as_ref()
+            .map(|s| Decimal::from_str(s))
+            .transpose()
+            .context("Invalid grid trailing_down_limit")?,
+    })
+}
+
+fn leg_overrides_by_side(
+    orchestrator_json: &OrchestratorConfigJson,
+) -> Result<HashMap<u8, OrchestratorLegConfigJson>> {
+    let mut overrides = HashMap::new();
+    for leg in &orchestrator_json.legs {
+        anyhow::ensure!(
+            leg.side == 0 || leg.side == 1,
+            "orchestrator.legs side must be 0 or 1"
+        );
+        anyhow::ensure!(
+            overrides.insert(leg.side, leg.clone()).is_none(),
+            "duplicate orchestrator.legs entry for side {}",
+            leg.side
+        );
+    }
+    Ok(overrides)
+}
+
+fn apply_leg_override(grid_config: &mut GridConfig, leg: &OrchestratorLegConfigJson) -> Result<()> {
+    grid_config.start_price =
+        Decimal::from_str(&leg.start_price).context("Invalid orchestrator leg start_price")?;
+    grid_config.end_price =
+        Decimal::from_str(&leg.end_price).context("Invalid orchestrator leg end_price")?;
+    grid_config.trailing_up_limit = leg
+        .trailing_up_limit
+        .as_ref()
+        .map(|s| Decimal::from_str(s))
+        .transpose()
+        .context("Invalid orchestrator leg trailing_up_limit")?;
+    grid_config.trailing_down_limit = leg
+        .trailing_down_limit
+        .as_ref()
+        .map(|s| Decimal::from_str(s))
+        .transpose()
+        .context("Invalid orchestrator leg trailing_down_limit")?;
+    Ok(())
+}
+
+fn validate_grid_config_with_price_bounds(grid_config: &GridConfig) -> Result<()> {
+    let mut errors = grid_config.validate();
+    let mut bounded_prices = vec![
+        ("grid.start_price", grid_config.start_price),
+        ("grid.end_price", grid_config.end_price),
+    ];
+    if let Some(price) = grid_config.trailing_up_limit {
+        bounded_prices.push(("grid.trailing_up_limit", price));
+    }
+    if let Some(price) = grid_config.trailing_down_limit {
+        bounded_prices.push(("grid.trailing_down_limit", price));
+    }
+    push_price_bound_errors(&grid_config.market, &bounded_prices, &mut errors);
+    if !errors.is_empty() {
+        anyhow::bail!(
+            "Grid configuration validation failed: {}",
+            errors.join(", ")
+        );
+    }
+    Ok(())
+}
+
 /// Build the strategy from a V2 BotConfig.
 /// Works identically on native and WASM.
 pub fn build_strategy(config: &BotConfig) -> Result<Box<dyn Strategy>> {
@@ -658,6 +904,7 @@ pub fn build_strategy(config: &BotConfig) -> Result<Box<dyn Strategy>> {
     let is_grid = strategy_type == "grid";
     let is_dca = strategy_type == "dca";
     let is_mm = strategy_type == "mm" || strategy_type == "market_maker";
+    let is_orchestrator = strategy_type == "orchestrator";
 
     if is_arb {
         // Arbitrage strategy — requires exactly 2 markets: [spot, perp]
@@ -703,6 +950,80 @@ pub fn build_strategy(config: &BotConfig) -> Result<Box<dyn Strategy>> {
         }
 
         Ok(Box::new(ArbitrageStrategy::new(arb_config)))
+    } else if is_orchestrator {
+        let orchestrator_json = config
+            .orchestrator
+            .as_ref()
+            .context("Orchestrator config missing: add 'orchestrator' section")?;
+        let grid_json = config
+            .grid
+            .as_ref()
+            .context("Orchestrator V1 requires a child 'grid' section")?;
+
+        anyhow::ensure!(
+            orchestrator_json.kind == "prediction_yes_no_grid",
+            "Unsupported orchestrator kind '{}'; supported kind: prediction_yes_no_grid",
+            orchestrator_json.kind
+        );
+        anyhow::ensure!(
+            orchestrator_json.allocation_mode == "static_50_50",
+            "Unsupported orchestrator allocation_mode '{}'; supported mode: static_50_50",
+            orchestrator_json.allocation_mode
+        );
+
+        let markets = orchestrator_markets(config)?;
+        let leg_overrides = leg_overrides_by_side(orchestrator_json)?;
+        let total_allocation = Decimal::from_str(&grid_json.max_investment_quote)
+            .context("Invalid max_investment_quote")?;
+        let child_allocation = total_allocation / Decimal::TWO;
+
+        let mut legs = Vec::new();
+        for market in markets {
+            let (_, side, _) = market
+                .outcome_params()
+                .context("Orchestrator V1 only supports outcome markets")?;
+            let label = outcome_side_label(side);
+            let mut child_config = build_grid_config_for_market(
+                config,
+                grid_json,
+                market.clone(),
+                StrategyId::new(format!("{}-{}-grid", config.primary_market().base(), label)),
+                Some(child_allocation),
+                true,
+                true,
+            )?;
+            if let Some(leg_override) = leg_overrides.get(&side) {
+                apply_leg_override(&mut child_config, leg_override)?;
+            }
+            validate_grid_config_with_price_bounds(&child_config)?;
+            legs.push(OrchestratorLeg::new(
+                label,
+                child_config.market.instrument_id(),
+                Box::new(GridStrategy::new(child_config)),
+            ));
+        }
+
+        let risk = GroupRiskConfig {
+            allocated_capital_quote: total_allocation,
+            take_profit_pct: orchestrator_json
+                .take_profit_pct
+                .as_ref()
+                .map(|s| Decimal::from_str(s))
+                .transpose()
+                .context("Invalid orchestrator take_profit_pct")?,
+            stop_loss_pct: orchestrator_json
+                .stop_loss_pct
+                .as_ref()
+                .map(|s| Decimal::from_str(s))
+                .transpose()
+                .context("Invalid orchestrator stop_loss_pct")?,
+        };
+
+        Ok(Box::new(BotOrchestrator::new(
+            StrategyId::new(format!("{}-orchestrator", config.primary_market().base())),
+            legs,
+            risk,
+        )))
     } else if is_grid {
         // Grid strategy
         let grid_json = config
@@ -981,8 +1302,9 @@ pub fn build_instrument_meta(config: &BotConfig) -> InstrumentMeta {
 /// For multi-instrument strategies (e.g., Arbitrage with spot + perp),
 /// this returns one `InstrumentMeta` per market entry.
 pub fn build_instrument_metas(config: &BotConfig) -> Vec<InstrumentMeta> {
-    config
-        .markets
+    let markets = orchestrator_markets(config).unwrap_or_else(|_| config.markets.clone());
+
+    markets
         .iter()
         .map(|market| {
             let quote_currency = market.quote();
@@ -1037,6 +1359,7 @@ mod tests {
             private_key: String::new(),
             address: String::new(),
             vault_address: None,
+            base_url_override: None,
             strategy_type: strategy_type.to_string(),
             markets: vec![btc_perp_market()],
             poll_delay_ms: 500,
@@ -1044,6 +1367,7 @@ mod tests {
             mm: None,
             dca: None,
             arbitrage: None,
+            orchestrator: None,
             builder_fee: None,
             sync: None,
             simulation: None,
@@ -1070,6 +1394,74 @@ mod tests {
         });
 
         assert_eq!(config.strategy_allocated_capital_usdc(), Some(dec!(123.45)));
+    }
+
+    #[test]
+    fn orchestrator_registers_both_outcome_legs_from_one_market() {
+        let mut config = base_config("orchestrator");
+        config.markets = vec![btc_outcome_market()];
+        config.grid = Some(GridConfigJson {
+            mode: "long".to_string(),
+            levels: 10,
+            start_price: "0.2".to_string(),
+            end_price: "0.8".to_string(),
+            max_investment_quote: "500".to_string(),
+            leverage: "1".to_string(),
+            max_leverage: "1".to_string(),
+            post_only: false,
+            stop_loss: Some("10".to_string()),
+            take_profit: Some("10".to_string()),
+            trailing_up_limit: None,
+            trailing_down_limit: None,
+        });
+        config.orchestrator = Some(OrchestratorConfigJson {
+            kind: "prediction_yes_no_grid".to_string(),
+            allocation_mode: "static_50_50".to_string(),
+            take_profit_pct: Some("10".to_string()),
+            stop_loss_pct: Some("5".to_string()),
+            legs: Vec::new(),
+        });
+
+        let strategy = build_strategy(&config).expect("orchestrator strategy should build");
+        assert_eq!(strategy.id().as_str(), "BTC > 78213-orchestrator");
+
+        let metas = build_instrument_metas(&config);
+        let instruments: Vec<String> = metas
+            .iter()
+            .map(|meta| meta.instrument_id.to_string())
+            .collect();
+        assert_eq!(instruments, vec!["#10-OUTCOME", "#11-OUTCOME"]);
+        assert_eq!(config.strategy_allocated_capital_usdc(), Some(dec!(500)));
+    }
+
+    #[test]
+    fn orchestrator_accepts_client_supplied_leg_ranges() {
+        let orchestrator = OrchestratorConfigJson {
+            kind: "prediction_yes_no_grid".to_string(),
+            allocation_mode: "static_50_50".to_string(),
+            take_profit_pct: None,
+            stop_loss_pct: None,
+            legs: vec![
+                OrchestratorLegConfigJson {
+                    side: 0,
+                    start_price: "0.30".to_string(),
+                    end_price: "0.36".to_string(),
+                    trailing_up_limit: None,
+                    trailing_down_limit: None,
+                },
+                OrchestratorLegConfigJson {
+                    side: 1,
+                    start_price: "0.64".to_string(),
+                    end_price: "0.70".to_string(),
+                    trailing_up_limit: None,
+                    trailing_down_limit: None,
+                },
+            ],
+        };
+
+        let overrides = leg_overrides_by_side(&orchestrator).expect("valid leg overrides");
+        assert_eq!(overrides[&0].start_price, "0.30");
+        assert_eq!(overrides[&1].end_price, "0.70");
     }
 
     #[test]

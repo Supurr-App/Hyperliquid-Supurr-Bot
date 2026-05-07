@@ -1,0 +1,56 @@
+{
+  "environment": "mainnet",
+  "vault_address": null,
+  "strategy_type": "orchestrator",
+  "markets": [
+    {
+      "exchange": "hyperliquid",
+      "type": "outcome",
+      "base": "BTC",
+      "quote": "USDH",
+      "name": "BTC > 81041",
+      "outcome_id": 5,
+      "side": 0,
+      "instrument_meta": {
+        "tick_size": "0.001",
+        "lot_size": "1",
+        "min_qty": "1",
+        "min_notional": "10"
+      }
+    }
+  ],
+  "poll_delay_ms": 1000,
+  "orchestrator": {
+    "kind": "prediction_yes_no_grid",
+    "allocation_mode": "static_50_50",
+    "take_profit_pct": "10",
+    "stop_loss_pct": "10",
+    "legs": [
+      {
+        "side": 0,
+        "start_price": "0.328",
+        "end_price": "0.336"
+      },
+      {
+        "side": 1,
+        "start_price": "0.645",
+        "end_price": "0.661"
+      }
+    ]
+  },
+  "grid": {
+    "mode": "long",
+    "levels": 3,
+    "start_price": "0.328",
+    "end_price": "0.336",
+    "max_investment_quote": "80",
+    "leverage": "1",
+    "max_leverage": "1",
+    "post_only": true,
+    "stop_loss": null,
+    "take_profit": null,
+    "trailing_up_limit": null,
+    "trailing_down_limit": null
+  },
+  "builder_fee": null
+}

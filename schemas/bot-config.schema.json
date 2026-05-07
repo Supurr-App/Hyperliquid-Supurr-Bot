@@ -26,6 +26,14 @@
         }
       ]
     },
+    "base_url_override": {
+      "description": "Optional Hyperliquid base URL override. When set, both /info and /exchange requests use this gateway.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "builder_fee": {
       "description": "Builder fee configuration",
       "default": null,
@@ -98,6 +106,18 @@
         }
       ]
     },
+    "orchestrator": {
+      "description": "Orchestrator strategy configuration",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/OrchestratorConfigJson"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "poll_delay_ms": {
       "description": "Polling delay in milliseconds",
       "default": 500,
@@ -110,7 +130,7 @@
       "type": "string"
     },
     "strategy_type": {
-      "description": "Strategy type: \"grid\", \"mm\", \"dca\", or \"arbitrage\"",
+      "description": "Strategy type: \"grid\", \"mm\", \"dca\", \"arbitrage\", or \"orchestrator\"",
       "type": "string"
     },
     "sync": {
@@ -571,6 +591,87 @@
         "type": {
           "description": "Market type: \"perp\", \"spot\", \"hip3\", or \"outcome\"",
           "type": "string"
+        }
+      }
+    },
+    "OrchestratorConfigJson": {
+      "description": "Parent strategy configuration for grouped child strategies.",
+      "type": "object",
+      "properties": {
+        "allocation_mode": {
+          "description": "Static allocation mode for child legs. V1 supports \"static_50_50\".",
+          "default": "static_50_50",
+          "type": "string"
+        },
+        "kind": {
+          "description": "V1 kind: \"prediction_yes_no_grid\"",
+          "default": "prediction_yes_no_grid",
+          "type": "string"
+        },
+        "legs": {
+          "description": "Explicit child-leg ranges supplied by the client from live prices.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/OrchestratorLegConfigJson"
+          }
+        },
+        "stop_loss_pct": {
+          "description": "Group stop-loss threshold in percentage units. Example: \"5\" = -5%.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "take_profit_pct": {
+          "description": "Group take-profit threshold in percentage units. Example: \"10\" = +10%.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "OrchestratorLegConfigJson": {
+      "description": "Per-leg range override for orchestrated child strategies.",
+      "type": "object",
+      "required": [
+        "end_price",
+        "side",
+        "start_price"
+      ],
+      "properties": {
+        "end_price": {
+          "description": "Child grid end price for this side.",
+          "type": "string"
+        },
+        "side": {
+          "description": "Outcome side: 0 = Yes, 1 = No",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "start_price": {
+          "description": "Child grid start price for this side.",
+          "type": "string"
+        },
+        "trailing_down_limit": {
+          "description": "Optional child trailing floor for this side.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trailing_up_limit": {
+          "description": "Optional child trailing ceiling for this side.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },

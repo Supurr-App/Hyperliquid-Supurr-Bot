@@ -23,6 +23,7 @@ wasm = ["wasm-bindgen", "wasm-bindgen-futures", "gloo-timers", "js-sys", "consol
 
 [dependencies]
 bot-core = { workspace = true }
+bot-orchestrator = { workspace = true }
 rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
 serde = { workspace = true }

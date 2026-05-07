@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // Re-export strategy config structs from bot-engine (single source of truth)
 pub use bot_engine::{
     ArbitrageConfigJson, BuilderFeeConfig, DCAConfigJson, GridConfigJson, MMConfigJson,
-    SyncConfigJson,
+    OrchestratorConfigJson, SyncConfigJson,
 };
 
 /// V2 Bot configuration - the full config format for all strategies.
@@ -36,7 +36,12 @@ pub struct BotConfig {
     #[serde(default)]
     pub vault_address: Option<String>,
 
-    /// Strategy type: "grid", "mm", "dca", or "arbitrage"
+    /// Optional Hyperliquid base URL override.
+    /// When set, both /info and /exchange requests use this gateway.
+    #[serde(default)]
+    pub base_url_override: Option<String>,
+
+    /// Strategy type: "grid", "mm", "dca", "arbitrage", or "orchestrator"
     pub strategy_type: String,
 
     /// Markets to trade on (V2 format)
@@ -65,6 +70,10 @@ pub struct BotConfig {
     /// Arbitrage strategy configuration
     #[serde(default)]
     pub arbitrage: Option<ArbitrageConfigJson>,
+
+    /// Orchestrator strategy configuration
+    #[serde(default)]
+    pub orchestrator: Option<OrchestratorConfigJson>,
 
     // -------------------------------------------------------------------------
     // Common config

@@ -180,12 +180,15 @@ impl HyperliquidClient {
     /// For HIP-3, uses the calculated HIP-3 asset ID.
     /// For regular perps/spot, returns the provided market_index.
     fn effective_asset_id(&self, market_index: &MarketIndex) -> u32 {
-        if let Some(ref outcome) = self.outcome {
-            outcome.asset_id()
+        let value = market_index.value();
+        if value >= 100_000_000 {
+            value
         } else if let Some(ref hip3) = self.hip3 {
             hip3.calculate_asset_id()
+        } else if let Some(ref outcome) = self.outcome {
+            outcome.asset_id()
         } else {
-            market_index.value()
+            value
         }
     }
 
@@ -506,7 +509,7 @@ impl HyperliquidClient {
                         tracing::debug!("Resolving spot alias: {} -> {}", f.coin, configured_coin);
                         configured_coin.clone()
                     } else {
-                        tracing::warn!(
+                        tracing::debug!(
                             "Spot fill has alias '{}' but spot_coin not configured - using alias",
                             f.coin
                         );
@@ -1269,9 +1272,15 @@ impl HyperliquidClient {
                     continue;
                 }
 
+                let outcome_coin = coin
+                    .strip_prefix('+')
+                    .map(|encoding| format!("#{}", encoding))
+                    .or_else(|| coin.starts_with('#').then(|| coin.to_string()));
                 let is_configured_outcome = configured_outcome_coin.as_deref() == Some(coin)
                     || configured_outcome_token.as_deref() == Some(coin);
-                let instrument = if is_configured_outcome {
+                let instrument = if let Some(outcome_coin) = outcome_coin {
+                    InstrumentId::new(format!("{}-OUTCOME", outcome_coin))
+                } else if is_configured_outcome {
                     InstrumentId::new(format!(
                         "{}-OUTCOME",
                         configured_outcome_coin.as_deref().unwrap_or(coin)
@@ -1532,7 +1541,7 @@ mod tests {
     }
 
     #[test]
-    fn outcome_account_state_parses_only_configured_outcome_balance() {
+    fn outcome_account_state_parses_all_outcome_balances() {
         let mut config = test_config();
         config.is_outcome = true;
         config.outcome = Some(OutcomeConfig {
@@ -1547,12 +1556,13 @@ mod tests {
                 {"coin": "USDC", "token": 0, "total": "97.5", "hold": "0.0", "entryNtl": "0.0"},
                 {"coin": "USDH", "token": 360, "total": "20.25", "hold": "0.0", "entryNtl": "0.0"},
                 {"coin": "+10", "total": "2", "hold": "0.0", "entryNtl": "1.2"},
+                {"coin": "+11", "total": "4", "hold": "0.0", "entryNtl": "2.0"},
                 {"coin": "HYPE", "token": 150, "total": "3", "hold": "0.0", "entryNtl": "9.0"}
             ]
         }));
 
         assert_eq!(state.account_value, Some(Decimal::new(2025, 2)));
-        assert_eq!(state.positions.len(), 1);
+        assert_eq!(state.positions.len(), 2);
         assert_eq!(state.positions[0].instrument.to_string(), "#10-OUTCOME");
         assert_eq!(state.positions[0].qty, Decimal::new(2, 0));
         assert_eq!(
@@ -1560,6 +1570,8 @@ mod tests {
             Some(Price::new(Decimal::new(6, 1)))
         );
         assert_eq!(state.positions[0].liquidation_px, None);
+        assert_eq!(state.positions[1].instrument.to_string(), "#11-OUTCOME");
+        assert_eq!(state.positions[1].qty, Decimal::new(4, 0));
     }
 
     #[test]

@@ -1,0 +1,38 @@
+{
+  "environment": "mainnet",
+  "vault_address": null,
+  "strategy_type": "grid",
+  "markets": [
+    {
+      "exchange": "hyperliquid",
+      "type": "outcome",
+      "base": "BTC",
+      "quote": "USDH",
+      "name": "BTC > 81041",
+      "outcome_id": 5,
+      "side": 0,
+      "instrument_meta": {
+        "tick_size": "0.001",
+        "lot_size": "1",
+        "min_qty": "1",
+        "min_notional": "10"
+      }
+    }
+  ],
+  "poll_delay_ms": 1000,
+  "grid": {
+    "mode": "long",
+    "levels": 2,
+    "start_price": "0.320",
+    "end_price": "0.360",
+    "max_investment_quote": "40",
+    "leverage": "1",
+    "max_leverage": "1",
+    "post_only": true,
+    "stop_loss": null,
+    "take_profit": null,
+    "trailing_up_limit": null,
+    "trailing_down_limit": null
+  },
+  "builder_fee": null
+}

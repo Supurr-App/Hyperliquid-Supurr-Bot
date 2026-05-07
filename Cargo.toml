@@ -4,6 +4,7 @@ members = [
     "crates/bot-cli",
     "crates/bot-core",
     "crates/bot-engine",
+    "crates/bot-orchestrator",
     "crates/exchange-hyperliquid",
     "crates/strategy-arbitrage",
     "crates/strategy-dca",
@@ -29,6 +30,7 @@ license = "MIT"
 # Internal crates
 bot-core = { path = "crates/bot-core" }
 bot-engine = { path = "crates/bot-engine" }
+bot-orchestrator = { path = "crates/bot-orchestrator" }
 exchange-hyperliquid = { path = "crates/exchange-hyperliquid" }
 strategy-market-maker = { path = "crates/strategy-market-maker" }
 strategy-tick-trader = { path = "crates/strategy-tick-trader" }
@@ -97,4 +99,3 @@ debug = true
 opt-level = 3
 lto = "thin"
 strip = "symbols"
-

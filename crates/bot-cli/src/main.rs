@@ -43,6 +43,7 @@ use exchange_hyperliquid::{
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -129,6 +130,7 @@ OPTIONS:
     -c, --config <FILE>    Path to JSON config file
     -d, --dry-run          Print config and exit without trading
     -m, --mode <MODE>      Trading mode: 'live' (default) or 'paper'
+    -p, --prices <FILE>    Run backtest with historical prices JSON
     -h, --help             Print help information
 
 
@@ -270,6 +272,133 @@ fn quote_from_backtest_price(
     }
 }
 
+#[derive(serde::Deserialize)]
+struct BacktestPricePoint {
+    ts: i64,
+    price: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum BacktestPricesFile {
+    Single {
+        prices: Vec<BacktestPricePoint>,
+    },
+    Multi {
+        #[serde(alias = "pricesByInstrument")]
+        prices_by_instrument: HashMap<String, Vec<BacktestPricePoint>>,
+    },
+}
+
+fn outcome_encoding_from_instrument(instrument: &InstrumentId) -> Option<u32> {
+    instrument
+        .as_str()
+        .strip_prefix('#')?
+        .strip_suffix("-OUTCOME")?
+        .parse::<u32>()
+        .ok()
+}
+
+fn outcome_backtest_price_for_instrument(
+    config: &BotConfig,
+    instrument: &InstrumentId,
+    price: Decimal,
+) -> Option<Decimal> {
+    let primary_instrument = config.instrument_id();
+    if instrument == &primary_instrument {
+        return Some(price);
+    }
+
+    let (primary_outcome_id, primary_side, _) = config.primary_market().outcome_params()?;
+    let encoding = outcome_encoding_from_instrument(instrument)?;
+    let instrument_outcome_id = encoding / 10;
+    let instrument_side = (encoding % 10) as u8;
+
+    if instrument_outcome_id != primary_outcome_id || instrument_side == primary_side {
+        return None;
+    }
+
+    Some((Decimal::ONE - price).clamp(Decimal::ZERO, Decimal::ONE))
+}
+
+fn quotes_from_single_backtest_prices(
+    config: &BotConfig,
+    instrument_metas: &[bot_core::InstrumentMeta],
+    primary_instrument_meta: &bot_core::InstrumentMeta,
+    prices: &[BacktestPricePoint],
+) -> Vec<Quote> {
+    let primary_instrument = config.instrument_id();
+    let is_outcome_orchestrator = config.strategy_type.to_lowercase() == "orchestrator"
+        && config.primary_market().is_outcome();
+
+    let mut quotes = Vec::new();
+    for point in prices {
+        let Ok(price) = Decimal::from_str(&point.price) else {
+            continue;
+        };
+
+        if is_outcome_orchestrator {
+            for meta in instrument_metas
+                .iter()
+                .filter(|meta| meta.kind == InstrumentKind::Outcome)
+            {
+                let Some(instrument_price) =
+                    outcome_backtest_price_for_instrument(config, &meta.instrument_id, price)
+                else {
+                    continue;
+                };
+                quotes.push(quote_from_backtest_price(
+                    &meta.instrument_id,
+                    meta,
+                    instrument_price,
+                    point.ts,
+                ));
+            }
+        } else {
+            quotes.push(quote_from_backtest_price(
+                &primary_instrument,
+                primary_instrument_meta,
+                price,
+                point.ts,
+            ));
+        }
+    }
+
+    quotes
+}
+
+fn quotes_from_multi_backtest_prices(
+    instrument_metas: &[bot_core::InstrumentMeta],
+    prices_by_instrument: &HashMap<String, Vec<BacktestPricePoint>>,
+) -> Vec<Quote> {
+    let metas_by_instrument: HashMap<String, &bot_core::InstrumentMeta> = instrument_metas
+        .iter()
+        .map(|meta| (meta.instrument_id.to_string(), meta))
+        .collect();
+
+    let mut quotes = Vec::new();
+    for (instrument, prices) in prices_by_instrument {
+        let Some(meta) = metas_by_instrument.get(instrument) else {
+            tracing::warn!("Ignoring prices for unregistered instrument {}", instrument);
+            continue;
+        };
+        for point in prices {
+            let Ok(price) = Decimal::from_str(&point.price) else {
+                continue;
+            };
+            quotes.push(quote_from_backtest_price(
+                &meta.instrument_id,
+                meta,
+                price,
+                point.ts,
+            ));
+        }
+    }
+
+    quotes.sort_by_key(|quote| quote.ts);
+    quotes
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Load .env file if present
@@ -402,7 +531,7 @@ async fn main() -> Result<()> {
         vault_address: config.vault_address.clone(),
         timeout_secs: 10,
         proxy_url: None,
-        base_url_override: None,
+        base_url_override: config.base_url_override.clone(),
         builder_fee,
         hip3,
         is_spot: config.is_spot(),
@@ -483,20 +612,8 @@ async fn main() -> Result<()> {
                 let prices_str = std::fs::read_to_string(prices_path)
                     .with_context(|| format!("Failed to read prices file: {:?}", prices_path))?;
 
-                #[derive(serde::Deserialize)]
-                struct PricePoint {
-                    ts: i64,
-                    price: String,
-                }
-                #[derive(serde::Deserialize)]
-                struct PricesFile {
-                    prices: Vec<PricePoint>,
-                }
-
-                let prices_file: PricesFile =
+                let prices_file: BacktestPricesFile =
                     serde_json::from_str(&prices_str).context("Failed to parse prices JSON")?;
-
-                tracing::info!("Loaded {} historical prices", prices_file.prices.len());
 
                 // Create standalone paper exchange with "hyperliquid" ID for strategy compatibility
                 let initial_balances =
@@ -530,21 +647,31 @@ async fn main() -> Result<()> {
                     );
                 }
 
-                // Convert prices to quotes and queue them
-                let instrument = config.instrument_id();
-                let quotes: Vec<Quote> = prices_file
-                    .prices
-                    .iter()
-                    .filter_map(|p| {
-                        let price = Decimal::from_str(&p.price).ok()?;
-                        Some(quote_from_backtest_price(
-                            &instrument,
+                // Convert prices to quotes and queue them. Legacy files provide one
+                // price stream for the primary instrument. For outcome orchestrators,
+                // synthesize the opposite side as `1 - primary_price`.
+                let quotes = match prices_file {
+                    BacktestPricesFile::Single { prices } => {
+                        tracing::info!("Loaded {} historical prices", prices.len());
+                        quotes_from_single_backtest_prices(
+                            &config,
+                            &instrument_metas,
                             &primary_instrument_meta,
-                            price,
-                            p.ts,
-                        ))
-                    })
-                    .collect();
+                            &prices,
+                        )
+                    }
+                    BacktestPricesFile::Multi {
+                        prices_by_instrument,
+                    } => {
+                        let count: usize = prices_by_instrument.values().map(Vec::len).sum();
+                        tracing::info!(
+                            "Loaded {} historical prices across {} instruments",
+                            count,
+                            prices_by_instrument.len()
+                        );
+                        quotes_from_multi_backtest_prices(&instrument_metas, &prices_by_instrument)
+                    }
+                };
 
                 tracing::info!("Queued {} quotes for backtest", quotes.len());
                 paper.queue_quotes(quotes).await;

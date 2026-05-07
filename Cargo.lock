@@ -227,6 +227,7 @@ dependencies = [
  "async-lock",
  "async-trait",
  "bot-core",
+ "bot-orchestrator",
  "console_error_panic_hook",
  "futures",
  "gloo-timers",
@@ -250,6 +251,16 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+]
+
+[[package]]
+name = "bot-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "bot-core",
+ "rust_decimal",
+ "serde",
+ "tracing",
 ]
 
 [[package]]

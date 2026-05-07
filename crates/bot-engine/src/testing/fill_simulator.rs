@@ -172,6 +172,12 @@ impl FillSimulator {
             return Fee::new(Decimal::ZERO, assets.quote_asset.clone());
         }
 
+        if assets.kind == InstrumentKind::Outcome {
+            let notional = qty.0 * price.0;
+            let fee_amount = notional * fee_rate;
+            return Fee::new(fee_amount, assets.quote_asset.clone());
+        }
+
         if assets.kind.is_spot_like() {
             match side {
                 OrderSide::Buy => {
@@ -180,7 +186,7 @@ impl FillSimulator {
                     Fee::new(fee_amount, assets.base_asset.clone())
                 }
                 OrderSide::Sell => {
-                    // Spot/Outcome SELL: fee deducted from received quote asset
+                    // Spot SELL: fee deducted from received quote asset
                     let notional = qty.0 * price.0;
                     let fee_amount = notional * fee_rate;
                     Fee::new(fee_amount, assets.quote_asset.clone())
@@ -529,6 +535,21 @@ mod tests {
         }
     }
 
+    fn spot_meta() -> InstrumentMeta {
+        InstrumentMeta {
+            instrument_id: InstrumentId::new("HYPE-SPOT"),
+            market_index: MarketIndex::new(200),
+            base_asset: AssetId::new("HYPE"),
+            quote_asset: AssetId::new("USDC"),
+            tick_size: dec!(0.001),
+            lot_size: dec!(0.01),
+            min_qty: Some(dec!(0.01)),
+            min_notional: Some(dec!(10)),
+            fee_asset_default: Some(AssetId::new("HYPE")),
+            kind: InstrumentKind::Spot,
+        }
+    }
+
     #[test]
     fn test_buy_order_fills_when_ask_crosses() {
         let mut balances = HashMap::new();
@@ -597,7 +618,7 @@ mod tests {
         let mut balances = HashMap::new();
         balances.insert(AssetId::new("USDH"), dec!(100));
 
-        let mut sim = FillSimulator::new(balances);
+        let mut sim = FillSimulator::new_with_fee(balances, dec!(0.00025));
         sim.register_instrument_meta(&outcome_meta());
 
         sim.add_pending_order(PendingOrder {
@@ -605,7 +626,49 @@ mod tests {
             exchange_order_id: ExchangeOrderId::new("ex-outcome-buy"),
             instrument: InstrumentId::new("#20-OUTCOME"),
             side: OrderSide::Buy,
-            price: Price::new(dec!(0.46)),
+            price: Price::new(dec!(0.39)),
+            qty: Qty::new(dec!(64)),
+            remaining_qty: Qty::new(dec!(64)),
+            created_at: 0,
+        });
+
+        let mut quotes = HashMap::new();
+        quotes.insert(
+            InstrumentId::new("#20-OUTCOME"),
+            Quote {
+                instrument: InstrumentId::new("#20-OUTCOME"),
+                bid: Price::new(dec!(0.388)),
+                ask: Price::new(dec!(0.389)),
+                bid_size: Qty::new(dec!(1000)),
+                ask_size: Qty::new(dec!(1000)),
+                ts: 0,
+            },
+        );
+
+        let fills = sim.check_fills(&quotes, 1000);
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].fill.fee.asset, AssetId::new("USDH"));
+        assert_eq!(fills[0].fill.fee.amount, dec!(0.00624));
+        assert_eq!(sim.balance(&AssetId::new("USDH")), dec!(75.03376));
+        assert_eq!(sim.balance(&AssetId::new("BTC > 79980")), dec!(64));
+        assert_eq!(sim.balance(&AssetId::new("USDC")), Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_outcome_sell_uses_usdh_quote_fee() {
+        let mut balances = HashMap::new();
+        balances.insert(AssetId::new("BTC > 79980"), dec!(100));
+        balances.insert(AssetId::new("USDH"), dec!(0));
+
+        let mut sim = FillSimulator::new_with_fee(balances, dec!(0.00025));
+        sim.register_instrument_meta(&outcome_meta());
+
+        sim.add_pending_order(PendingOrder {
+            client_id: ClientOrderId::new("outcome-sell"),
+            exchange_order_id: ExchangeOrderId::new("ex-outcome-sell"),
+            instrument: InstrumentId::new("#20-OUTCOME"),
+            side: OrderSide::Sell,
+            price: Price::new(dec!(0.42)),
             qty: Qty::new(dec!(10)),
             remaining_qty: Qty::new(dec!(10)),
             created_at: 0,
@@ -616,8 +679,8 @@ mod tests {
             InstrumentId::new("#20-OUTCOME"),
             Quote {
                 instrument: InstrumentId::new("#20-OUTCOME"),
-                bid: Price::new(dec!(0.458)),
-                ask: Price::new(dec!(0.459)),
+                bid: Price::new(dec!(0.421)),
+                ask: Price::new(dec!(0.422)),
                 bid_size: Qty::new(dec!(1000)),
                 ask_size: Qty::new(dec!(1000)),
                 ts: 0,
@@ -627,8 +690,48 @@ mod tests {
         let fills = sim.check_fills(&quotes, 1000);
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].fill.fee.asset, AssetId::new("USDH"));
-        assert_eq!(sim.balance(&AssetId::new("USDH")), dec!(95.4));
-        assert_eq!(sim.balance(&AssetId::new("BTC > 79980")), dec!(10));
-        assert_eq!(sim.balance(&AssetId::new("USDC")), Decimal::ZERO);
+        assert_eq!(fills[0].fill.fee.amount, dec!(0.00105));
+        assert_eq!(sim.balance(&AssetId::new("USDH")), dec!(4.19895));
+        assert_eq!(sim.balance(&AssetId::new("BTC > 79980")), dec!(90));
+    }
+
+    #[test]
+    fn test_spot_buy_still_uses_base_asset_fee() {
+        let mut balances = HashMap::new();
+        balances.insert(AssetId::new("USDC"), dec!(100));
+
+        let mut sim = FillSimulator::new_with_fee(balances, dec!(0.00025));
+        sim.register_instrument_meta(&spot_meta());
+
+        sim.add_pending_order(PendingOrder {
+            client_id: ClientOrderId::new("spot-buy"),
+            exchange_order_id: ExchangeOrderId::new("ex-spot-buy"),
+            instrument: InstrumentId::new("HYPE-SPOT"),
+            side: OrderSide::Buy,
+            price: Price::new(dec!(10)),
+            qty: Qty::new(dec!(2)),
+            remaining_qty: Qty::new(dec!(2)),
+            created_at: 0,
+        });
+
+        let mut quotes = HashMap::new();
+        quotes.insert(
+            InstrumentId::new("HYPE-SPOT"),
+            Quote {
+                instrument: InstrumentId::new("HYPE-SPOT"),
+                bid: Price::new(dec!(9.99)),
+                ask: Price::new(dec!(10)),
+                bid_size: Qty::new(dec!(1000)),
+                ask_size: Qty::new(dec!(1000)),
+                ts: 0,
+            },
+        );
+
+        let fills = sim.check_fills(&quotes, 1000);
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].fill.fee.asset, AssetId::new("HYPE"));
+        assert_eq!(fills[0].fill.fee.amount, dec!(0.00050));
+        assert_eq!(sim.balance(&AssetId::new("USDC")), dec!(80));
+        assert_eq!(sim.balance(&AssetId::new("HYPE")), dec!(1.99950));
     }
 }
