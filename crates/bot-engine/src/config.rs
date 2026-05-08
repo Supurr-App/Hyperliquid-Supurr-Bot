@@ -11,7 +11,10 @@ use bot_core::{
     AssetId, Environment, HyperliquidMarket, InstrumentId, InstrumentMeta, Market, Strategy,
     StrategyId,
 };
-use bot_orchestrator::{BotOrchestrator, GroupRiskConfig, OrchestratorLeg};
+use bot_orchestrator::{
+    BotOrchestrator, GroupRiskConfig, OrchestratorCondition, OrchestratorConditions,
+    OrchestratorLeg,
+};
 use rust_decimal::Decimal;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -551,6 +554,15 @@ pub struct OrchestratorConfigJson {
     /// Group stop-loss threshold in percentage units. Example: "5" = -5%.
     #[serde(default)]
     pub stop_loss_pct: Option<String>,
+    /// Conditions that must pass before child strategies start.
+    #[serde(default)]
+    pub start_conditions: Vec<OrchestratorCondition>,
+    /// Conditions that must remain valid while waiting/running.
+    #[serde(default)]
+    pub validation_conditions: Vec<OrchestratorCondition>,
+    /// Conditions that trigger a risk exit.
+    #[serde(default)]
+    pub risk_conditions: Vec<OrchestratorCondition>,
     /// Explicit child-leg ranges supplied by the client from live prices.
     #[serde(default)]
     pub legs: Vec<OrchestratorLegConfigJson>,
@@ -1018,11 +1030,17 @@ pub fn build_strategy(config: &BotConfig) -> Result<Box<dyn Strategy>> {
                 .transpose()
                 .context("Invalid orchestrator stop_loss_pct")?,
         };
+        let conditions = OrchestratorConditions {
+            start_conditions: orchestrator_json.start_conditions.clone(),
+            validation_conditions: orchestrator_json.validation_conditions.clone(),
+            risk_conditions: orchestrator_json.risk_conditions.clone(),
+        };
 
-        Ok(Box::new(BotOrchestrator::new(
+        Ok(Box::new(BotOrchestrator::with_conditions(
             StrategyId::new(format!("{}-orchestrator", config.primary_market().base())),
             legs,
             risk,
+            conditions,
         )))
     } else if is_grid {
         // Grid strategy
@@ -1419,6 +1437,9 @@ mod tests {
             allocation_mode: "static_50_50".to_string(),
             take_profit_pct: Some("10".to_string()),
             stop_loss_pct: Some("5".to_string()),
+            start_conditions: Vec::new(),
+            validation_conditions: Vec::new(),
+            risk_conditions: Vec::new(),
             legs: Vec::new(),
         });
 
@@ -1441,6 +1462,9 @@ mod tests {
             allocation_mode: "static_50_50".to_string(),
             take_profit_pct: None,
             stop_loss_pct: None,
+            start_conditions: Vec::new(),
+            validation_conditions: Vec::new(),
+            risk_conditions: Vec::new(),
             legs: vec![
                 OrchestratorLegConfigJson {
                     side: 0,

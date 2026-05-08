@@ -594,6 +594,181 @@
         }
       }
     },
+    "OrchestratorCondition": {
+      "description": "Deterministic condition evaluated by the orchestrator from local engine state.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "price",
+            "type"
+          ],
+          "properties": {
+            "instrument": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "price": {
+              "type": "string",
+              "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "price_above"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "price",
+            "type"
+          ],
+          "properties": {
+            "instrument": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "price": {
+              "type": "string",
+              "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "price_below"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "instrument": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "max_abs": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+            },
+            "max_bps": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "spread_below"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "asset",
+            "available",
+            "type"
+          ],
+          "properties": {
+            "asset": {
+              "type": "string"
+            },
+            "available": {
+              "type": "string",
+              "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "balance_above"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "pct",
+            "type"
+          ],
+          "properties": {
+            "pct": {
+              "type": "string",
+              "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "group_pnl_pct_above"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "pct",
+            "type"
+          ],
+          "properties": {
+            "pct": {
+              "type": "string",
+              "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "group_pnl_pct_below"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "secs",
+            "type"
+          ],
+          "properties": {
+            "secs": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "max_running_time"
+              ]
+            }
+          }
+        }
+      ]
+    },
     "OrchestratorConfigJson": {
       "description": "Parent strategy configuration for grouped child strategies.",
       "type": "object",
@@ -616,6 +791,22 @@
             "$ref": "#/definitions/OrchestratorLegConfigJson"
           }
         },
+        "risk_conditions": {
+          "description": "Conditions that trigger a risk exit.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/OrchestratorCondition"
+          }
+        },
+        "start_conditions": {
+          "description": "Conditions that must pass before child strategies start.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/OrchestratorCondition"
+          }
+        },
         "stop_loss_pct": {
           "description": "Group stop-loss threshold in percentage units. Example: \"5\" = -5%.",
           "default": null,
@@ -631,6 +822,14 @@
             "string",
             "null"
           ]
+        },
+        "validation_conditions": {
+          "description": "Conditions that must remain valid while waiting/running.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/OrchestratorCondition"
+          }
         }
       }
     },

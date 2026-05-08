@@ -10,5 +10,6 @@ description = "In-process strategy orchestrator for grouped trading bots"
 [dependencies]
 bot-core = { workspace = true }
 rust_decimal = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }

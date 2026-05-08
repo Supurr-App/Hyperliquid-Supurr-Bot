@@ -259,6 +259,7 @@ version = "0.1.0"
 dependencies = [
  "bot-core",
  "rust_decimal",
+ "schemars",
  "serde",
  "tracing",
 ]
