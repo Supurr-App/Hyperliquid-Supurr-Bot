@@ -32,6 +32,8 @@ pub struct TradeSyncerConfig {
     /// Instruments to filter fills (only sync fills for these instruments)
     /// Empty = sync all fills (no filter)
     pub instruments: Vec<InstrumentId>,
+    /// Optional strategy type hint for upstream routing/aggregation.
+    pub strategy_type: Option<String>,
     /// Optional shared secret for upstream sync auth.
     pub sync_secret: Option<String>,
 }
@@ -46,6 +48,7 @@ impl Default for TradeSyncerConfig {
             max_retries: 3,
             retry_delay_ms: 1000,
             instruments: Vec::new(),
+            strategy_type: None,
             sync_secret: None,
         }
     }
@@ -283,11 +286,28 @@ impl TradeSyncer {
     }
 
     fn metadata_payload(&self) -> Option<serde_json::Value> {
-        self.metrics_snapshot.as_ref().map(|snapshot| {
-            serde_json::json!({
-                "performance_metrics": snapshot
-            })
-        })
+        let mut metadata = serde_json::Map::new();
+
+        if let Some(strategy_type) = self
+            .config
+            .strategy_type
+            .as_deref()
+            .filter(|s| !s.is_empty())
+        {
+            metadata.insert(
+                "strategy_type".to_string(),
+                serde_json::json!(strategy_type),
+            );
+        }
+
+        if let Some(snapshot) = self.metrics_snapshot.as_ref() {
+            metadata.insert(
+                "performance_metrics".to_string(),
+                serde_json::json!(snapshot),
+            );
+        }
+
+        (!metadata.is_empty()).then(|| serde_json::Value::Object(metadata))
     }
 
     /// Execute sync request with retry logic
@@ -709,12 +729,14 @@ mod tests {
         let config = TradeSyncerConfig {
             bot_id: "test-bot".to_string(),
             upstream_url: "http://test.com".to_string(),
+            strategy_type: Some("orchestrator".to_string()),
             ..Default::default()
         };
         let mut syncer = TradeSyncer::new(config).unwrap();
         syncer.set_metrics_snapshot(Some(make_metrics_snapshot()));
 
         let metadata = syncer.metadata_payload().expect("metadata");
+        assert_eq!(metadata["strategy_type"], serde_json::json!("orchestrator"));
         assert_eq!(
             metadata["performance_metrics"]["metrics"]["net_pnl"],
             serde_json::json!("10")
@@ -723,5 +745,32 @@ mod tests {
             metadata["performance_metrics"]["mode"],
             serde_json::json!("backtest")
         );
+    }
+
+    #[test]
+    fn test_metadata_payload_includes_strategy_type_without_metrics() {
+        let config = TradeSyncerConfig {
+            bot_id: "test-bot".to_string(),
+            upstream_url: "http://test.com".to_string(),
+            strategy_type: Some("grid".to_string()),
+            ..Default::default()
+        };
+        let syncer = TradeSyncer::new(config).unwrap();
+
+        let metadata = syncer.metadata_payload().expect("metadata");
+        assert_eq!(metadata["strategy_type"], serde_json::json!("grid"));
+        assert!(metadata.get("performance_metrics").is_none());
+    }
+
+    #[test]
+    fn test_metadata_payload_omitted_without_strategy_type_or_metrics() {
+        let config = TradeSyncerConfig {
+            bot_id: "test-bot".to_string(),
+            upstream_url: "http://test.com".to_string(),
+            ..Default::default()
+        };
+        let syncer = TradeSyncer::new(config).unwrap();
+
+        assert!(syncer.metadata_payload().is_none());
     }
 }

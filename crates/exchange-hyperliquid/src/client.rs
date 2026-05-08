@@ -397,6 +397,102 @@ impl HyperliquidClient {
             })
     }
 
+    fn open_order_coin_candidates(
+        &self,
+        instrument: &InstrumentId,
+        market_index: &MarketIndex,
+    ) -> Vec<String> {
+        let instrument_str = instrument.to_string();
+        let mut candidates = Vec::new();
+
+        let mut push = |value: String| {
+            if !value.is_empty() && !candidates.contains(&value) {
+                candidates.push(value);
+            }
+        };
+
+        if instrument_str.ends_with("-OUTCOME") {
+            let mut added_instrument_coin = false;
+            if let Some((base, _)) = instrument_str.rsplit_once('-') {
+                push(base.to_string());
+                added_instrument_coin = true;
+            }
+            if !added_instrument_coin {
+                if let Some(outcome) = self.outcome.as_ref() {
+                    push(outcome.coin_name());
+                }
+            }
+            return candidates;
+        }
+
+        if instrument_str.ends_with("-SPOT") {
+            if let Some(index) = self.config.spot_market_index {
+                push(format!("@{}", index.saturating_sub(10_000)));
+            } else if market_index.value() >= 10_000 {
+                push(format!("@{}", market_index.value() - 10_000));
+            }
+            if let Some(coin) = self.config.spot_coin.as_ref() {
+                push(coin.clone());
+            }
+            if let Some((base, _)) = instrument_str.rsplit_once('-') {
+                push(base.to_string());
+            }
+            return candidates;
+        }
+
+        if let Some((base, _)) = instrument_str.rsplit_once('-') {
+            push(base.to_string());
+            if let Some((_, dex_base)) = base.split_once(':') {
+                push(dex_base.to_string());
+            }
+        } else {
+            push(instrument_str);
+        }
+
+        candidates
+    }
+
+    fn filter_open_orders_for_instrument<'a>(
+        &self,
+        orders: &'a [HyperliquidOrder],
+        instrument: &InstrumentId,
+        market_index: &MarketIndex,
+    ) -> Vec<&'a HyperliquidOrder> {
+        let candidates = self.open_order_coin_candidates(instrument, market_index);
+        let matched: Vec<&HyperliquidOrder> = orders
+            .iter()
+            .filter(|order| candidates.iter().any(|coin| coin == &order.coin))
+            .collect();
+
+        if matched.is_empty()
+            && !orders.is_empty()
+            && orders.iter().all(|order| order.coin == orders[0].coin)
+        {
+            tracing::warn!(
+                "No open-order coin matched instrument={} candidates={:?}; falling back to only open coin={}",
+                instrument,
+                candidates,
+                orders[0].coin
+            );
+            return orders.iter().collect();
+        }
+
+        matched
+    }
+
+    fn cancel_status_error(status: &serde_json::Value) -> Option<String> {
+        if let Some(error) = status.get("error").and_then(|value| value.as_str()) {
+            return Some(error.to_string());
+        }
+        if let Some(text) = status.as_str() {
+            if text.eq_ignore_ascii_case("success") {
+                return None;
+            }
+            return Some(text.to_string());
+        }
+        None
+    }
+
     /// Build order wire format
     fn build_order_wire(
         &self,
@@ -1104,13 +1200,23 @@ impl Exchange for HyperliquidClient {
 
     async fn cancel_all_orders(
         &self,
-        _instrument: &InstrumentId,
+        instrument: &InstrumentId,
         market_index: &MarketIndex,
     ) -> Result<u32, ExchangeError> {
-        // Fetch all open orders for this market
+        // Fetch all open orders for the account, then scope the cancel to the
+        // requested instrument. Hyperliquid cancel pairs must use the matching
+        // asset id for each oid; mixed-instrument batches can leave orders open.
         let orders = self.fetch_open_orders().await?;
+        let matched_orders =
+            self.filter_open_orders_for_instrument(&orders, instrument, market_index);
 
-        if orders.is_empty() {
+        if matched_orders.is_empty() {
+            tracing::info!(
+                "No matching open orders to cancel for instrument={} (open_orders={}, candidates={:?})",
+                instrument,
+                orders.len(),
+                self.open_order_coin_candidates(instrument, market_index)
+            );
             return Ok(0);
         }
 
@@ -1118,7 +1224,7 @@ impl Exchange for HyperliquidClient {
         let asset_id = self.effective_asset_id(market_index);
 
         // Build batch cancel request - all cancels in a single API call
-        let cancels: Vec<serde_json::Value> = orders
+        let cancels: Vec<serde_json::Value> = matched_orders
             .iter()
             .map(|order| {
                 serde_json::json!({
@@ -1131,9 +1237,11 @@ impl Exchange for HyperliquidClient {
         let num_orders = cancels.len() as u32;
 
         tracing::info!(
-            "Batch canceling {} orders with asset_id={}",
+            "Batch canceling {} orders for instrument={} with asset_id={} (open_orders={})",
             num_orders,
-            asset_id
+            instrument,
+            asset_id,
+            orders.len()
         );
 
         let action = serde_json::json!({
@@ -1145,6 +1253,20 @@ impl Exchange for HyperliquidClient {
 
         match Self::exchange_status(&response) {
             Some("ok") => {
+                if let Some(statuses) = Self::extract_order_statuses(&response) {
+                    let errors: Vec<String> = statuses
+                        .iter()
+                        .filter_map(Self::cancel_status_error)
+                        .collect();
+                    if !errors.is_empty() {
+                        let reason = errors.join("; ");
+                        tracing::warn!("Batch cancel returned errors: {}", reason);
+                        return Err(ExchangeError::Rejected(format!(
+                            "Batch cancel returned errors: {}",
+                            reason
+                        )));
+                    }
+                }
                 tracing::info!("Batch cancel successful: {} orders", num_orders);
                 Ok(num_orders)
             }
@@ -1443,6 +1565,18 @@ mod tests {
         HyperliquidClient::new(config).expect("test client")
     }
 
+    fn test_order(coin: &str, oid: u64) -> HyperliquidOrder {
+        HyperliquidOrder {
+            coin: coin.to_string(),
+            side: "B".to_string(),
+            limit_px: "1".to_string(),
+            sz: "1".to_string(),
+            oid,
+            timestamp: 1,
+            cloid: None,
+        }
+    }
+
     #[test]
     fn cumulative_address_limit_error_maps_to_deferred_retry() {
         let response = serde_json::json!({
@@ -1538,6 +1672,70 @@ mod tests {
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].instrument.to_string(), "#10-OUTCOME");
         assert_eq!(fills[0].qty.0, Decimal::new(2, 0));
+    }
+
+    #[test]
+    fn cancel_all_filter_scopes_outcome_orders_to_requested_side() {
+        let mut config = test_config();
+        config.is_outcome = true;
+        config.outcome = Some(OutcomeConfig {
+            outcome_id: 7,
+            side: 0,
+            name: "BTC below 79303".to_string(),
+        });
+        let client = test_client(config);
+        let orders = vec![
+            test_order("#70", 10),
+            test_order("#71", 11),
+            test_order("BTC", 12),
+        ];
+
+        let matched = client.filter_open_orders_for_instrument(
+            &orders,
+            &InstrumentId::new("#70-OUTCOME"),
+            &MarketIndex::new(100_000_070),
+        );
+
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].coin, "#70");
+        assert_eq!(matched[0].oid, 10);
+    }
+
+    #[test]
+    fn cancel_all_filter_uses_requested_outcome_instrument_over_configured_side() {
+        let mut config = test_config();
+        config.is_outcome = true;
+        config.outcome = Some(OutcomeConfig {
+            outcome_id: 7,
+            side: 0,
+            name: "BTC below 79303".to_string(),
+        });
+        let client = test_client(config);
+        let orders = vec![test_order("#70", 10), test_order("#71", 11)];
+
+        let matched = client.filter_open_orders_for_instrument(
+            &orders,
+            &InstrumentId::new("#71-OUTCOME"),
+            &MarketIndex::new(100_000_071),
+        );
+
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].coin, "#71");
+        assert_eq!(matched[0].oid, 11);
+    }
+
+    #[test]
+    fn cancel_all_filter_keeps_single_coin_fallback_for_legacy_markets() {
+        let client = test_client(test_config());
+        let orders = vec![test_order("BTC", 10), test_order("BTC", 11)];
+
+        let matched = client.filter_open_orders_for_instrument(
+            &orders,
+            &InstrumentId::new("UNKNOWN-PERP"),
+            &MarketIndex::new(0),
+        );
+
+        assert_eq!(matched.len(), 2);
     }
 
     #[test]

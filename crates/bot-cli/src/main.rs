@@ -843,6 +843,7 @@ async fn main() -> Result<()> {
             max_retries: 3,
             retry_delay_ms: 1000,
             instruments: instruments.clone(),
+            strategy_type: Some(config.strategy_type.clone()),
             sync_secret: sync.sync_secret.clone(),
         })
     });
