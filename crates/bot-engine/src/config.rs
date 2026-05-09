@@ -563,9 +563,36 @@ pub struct OrchestratorConfigJson {
     /// Conditions that trigger a risk exit.
     #[serde(default)]
     pub risk_conditions: Vec<OrchestratorCondition>,
+    /// Generic child strategy plans. V1 generic orchestrator supports grid and dca only.
+    #[serde(default)]
+    pub children: Vec<OrchestratorChildConfigJson>,
     /// Explicit child-leg ranges supplied by the client from live prices.
     #[serde(default)]
     pub legs: Vec<OrchestratorLegConfigJson>,
+}
+
+/// Generic child strategy plan owned by the orchestrator.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OrchestratorChildConfigJson {
+    Grid {
+        /// Optional stable child ID used in logs and strategy IDs.
+        #[serde(default)]
+        id: Option<String>,
+        /// Market this child trades.
+        market: Market,
+        /// Grid configuration for this child.
+        grid: GridConfigJson,
+    },
+    Dca {
+        /// Optional stable child ID used in logs and strategy IDs.
+        #[serde(default)]
+        id: Option<String>,
+        /// Market this child trades.
+        market: Market,
+        /// DCA configuration for this child.
+        dca: DCAConfigJson,
+    },
 }
 
 /// Per-leg range override for orchestrated child strategies.
@@ -763,6 +790,25 @@ fn orchestrator_markets(config: &BotConfig) -> Result<Vec<Market>> {
         return Ok(config.markets.clone());
     }
 
+    let orchestrator_json = config
+        .orchestrator
+        .as_ref()
+        .context("Orchestrator config missing: add 'orchestrator' section")?;
+    if orchestrator_json.kind == "generic" {
+        anyhow::ensure!(
+            !orchestrator_json.children.is_empty(),
+            "generic orchestrator requires orchestrator.children"
+        );
+        return Ok(orchestrator_json
+            .children
+            .iter()
+            .map(|child| match child {
+                OrchestratorChildConfigJson::Grid { market, .. }
+                | OrchestratorChildConfigJson::Dca { market, .. } => market.clone(),
+            })
+            .collect());
+    }
+
     anyhow::ensure!(
         config.markets.len() == 1,
         "Orchestrator V1 expects exactly one configured market; it mirrors the opposite outcome side internally"
@@ -844,6 +890,60 @@ fn build_grid_config_for_market(
             .transpose()
             .context("Invalid grid trailing_down_limit")?,
     })
+}
+
+fn build_dca_config_for_market(
+    config: &BotConfig,
+    dca_json: &DCAConfigJson,
+    market: Market,
+    strategy_id: StrategyId,
+) -> Result<DCAConfig> {
+    Ok(DCAConfig {
+        strategy_id,
+        environment: config.parse_environment(),
+        market,
+        direction: match dca_json.direction.to_lowercase().as_str() {
+            "short" => DCADirection::Short,
+            _ => DCADirection::Long,
+        },
+        trigger_price: Decimal::from_str(&dca_json.trigger_price).context("Invalid trigger_price")?,
+        base_order_size: Decimal::from_str(&dca_json.base_order_size)
+            .context("Invalid base_order_size")?,
+        dca_order_size: Decimal::from_str(&dca_json.dca_order_size)
+            .context("Invalid dca_order_size")?,
+        max_dca_orders: dca_json.max_dca_orders,
+        size_multiplier: Decimal::from_str(&dca_json.size_multiplier)
+            .context("Invalid size_multiplier")?,
+        price_deviation_pct: Decimal::from_str(&dca_json.price_deviation_pct)
+            .context("Invalid price_deviation_pct")?,
+        deviation_multiplier: Decimal::from_str(&dca_json.deviation_multiplier)
+            .context("Invalid deviation_multiplier")?,
+        take_profit_pct: Decimal::from_str(&dca_json.take_profit_pct)
+            .context("Invalid take_profit_pct")?,
+        stop_loss: dca_json
+            .stop_loss
+            .as_ref()
+            .map(|s| Decimal::from_str(s))
+            .transpose()
+            .context("Invalid stop_loss")?,
+        leverage: Decimal::from_str(&dca_json.leverage).context("Invalid leverage")?,
+        max_leverage: Decimal::from_str(&dca_json.max_leverage).context("Invalid max_leverage")?,
+        restart_on_complete: dca_json.restart_on_complete,
+        cooldown_period_secs: dca_json.cooldown_period_secs,
+    })
+}
+
+fn validate_dca_config_with_price_bounds(dca_config: &DCAConfig) -> Result<()> {
+    let mut errors = dca_config.validate();
+    push_price_bound_errors(
+        &dca_config.market,
+        &[("dca.trigger_price", dca_config.trigger_price)],
+        &mut errors,
+    );
+    if !errors.is_empty() {
+        anyhow::bail!("DCA configuration validation failed: {}", errors.join(", "));
+    }
+    Ok(())
 }
 
 fn leg_overrides_by_side(
