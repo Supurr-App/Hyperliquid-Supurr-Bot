@@ -10,7 +10,9 @@ Cargo.lock
 *~
 TEST.md
 # Environment
-
+deploy.sh
+build.sh
+DEPLOY.md
 configs/*
 .env
 .env.*
@@ -27,7 +29,8 @@ market-index.json
 # ─── CONFIDENTIAL: Internal deployment & infra ───────────────────────────────
 deploy.sh
 compile.sh
-DEPLOY.md
+
+deploy.
 testing.md
 k8s/
 scripts/
