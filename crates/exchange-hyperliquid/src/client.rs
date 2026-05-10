@@ -601,12 +601,33 @@ impl HyperliquidClient {
                     // Outcome fills: coin is already "#5160" format, use as-is
                     f.coin.clone()
                 } else if is_spot_fill && f.coin.starts_with('@') {
-                    if let Some(ref configured_coin) = self.config.spot_coin {
-                        tracing::debug!("Resolving spot alias: {} -> {}", f.coin, configured_coin);
-                        configured_coin.clone()
+                    let expected_alias = self
+                        .config
+                        .spot_market_index
+                        .and_then(|index| index.checked_sub(10_000))
+                        .map(|index| format!("@{}", index));
+
+                    if let (Some(configured_coin), Some(expected_alias)) =
+                        (&self.config.spot_coin, expected_alias)
+                    {
+                        if f.coin == expected_alias {
+                            tracing::debug!(
+                                "Resolving spot alias: {} -> {}",
+                                f.coin,
+                                configured_coin
+                            );
+                            configured_coin.clone()
+                        } else {
+                            tracing::debug!(
+                                "Spot fill alias '{}' does not match configured alias '{}' - using alias",
+                                f.coin,
+                                expected_alias
+                            );
+                            f.coin.clone()
+                        }
                     } else {
                         tracing::debug!(
-                            "Spot fill has alias '{}' but spot_coin not configured - using alias",
+                            "Spot fill has alias '{}' but spot_coin or spot_market_index not configured - using alias",
                             f.coin
                         );
                         f.coin.clone()
@@ -1577,6 +1598,23 @@ mod tests {
         }
     }
 
+    fn test_fill(coin: &str) -> HyperliquidUserFill {
+        HyperliquidUserFill {
+            coin: coin.to_string(),
+            px: "42.237".to_string(),
+            sz: "0.42".to_string(),
+            side: "B".to_string(),
+            time: 1,
+            hash: "0xabc".to_string(),
+            oid: 42,
+            tid: Some(7),
+            fee: "0.001".to_string(),
+            fee_token: Some("USDC".to_string()),
+            cloid: Some("0x141423aba9ba477bbb6a8c529618027f".to_string()),
+            closed_pnl: None,
+        }
+    }
+
     #[test]
     fn cumulative_address_limit_error_maps_to_deferred_retry() {
         let response = serde_json::json!({
@@ -1672,6 +1710,49 @@ mod tests {
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].instrument.to_string(), "#10-OUTCOME");
         assert_eq!(fills[0].qty.0, Decimal::new(2, 0));
+    }
+
+    #[test]
+    fn spot_fill_resolves_matching_alias_to_configured_coin() {
+        let mut config = test_config();
+        config.is_spot = true;
+        config.spot_coin = Some("HYPE".to_string());
+        config.spot_market_index = Some(10_107);
+        let client = test_client(config);
+
+        let fills = client.parse_fills(vec![test_fill("@107")]);
+
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].instrument.to_string(), "HYPE-SPOT");
+    }
+
+    #[test]
+    fn spot_fill_keeps_non_matching_alias_unresolved() {
+        let mut config = test_config();
+        config.is_spot = true;
+        config.spot_coin = Some("HYPE".to_string());
+        config.spot_market_index = Some(10_107);
+        let client = test_client(config);
+
+        let fills = client.parse_fills(vec![test_fill("@230")]);
+
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].instrument.to_string(), "@230-SPOT");
+    }
+
+    #[test]
+    fn fill_parser_keeps_existing_non_spot_market_shapes() {
+        let client = test_client(test_config());
+
+        let fills = client.parse_fills(vec![
+            test_fill("BTC"),
+            test_fill("xyz:SP500"),
+            test_fill("#50"),
+        ]);
+
+        assert_eq!(fills[0].instrument.to_string(), "BTC-PERP");
+        assert_eq!(fills[1].instrument.to_string(), "xyz:SP500-PERP");
+        assert_eq!(fills[2].instrument.to_string(), "#50-OUTCOME");
     }
 
     #[test]

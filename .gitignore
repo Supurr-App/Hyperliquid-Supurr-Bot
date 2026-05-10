@@ -8,8 +8,10 @@ Cargo.lock
 *.swp
 *.swo
 *~
-
+TEST.md
 # Environment
+
+configs/*
 .env
 .env.*
 
