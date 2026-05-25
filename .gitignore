@@ -29,7 +29,7 @@ market-index.json
 # ─── CONFIDENTIAL: Internal deployment & infra ───────────────────────────────
 deploy.sh
 compile.sh
-
+key-rotate.sh
 deploy.
 testing.md
 k8s/
