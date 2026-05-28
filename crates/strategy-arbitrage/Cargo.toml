@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+include.workspace = true
 description = "Spot-Perp Arbitrage strategy for exploiting price spreads between spot and perpetual markets"
 
 [dependencies]
@@ -15,7 +18,6 @@ serde = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-bot-engine = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 tracing-subscriber = { workspace = true }
 rust_decimal_macros = { workspace = true }

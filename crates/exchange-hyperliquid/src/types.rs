@@ -209,58 +209,86 @@ impl Default for HyperliquidConfig {
 /// Hyperliquid order response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HyperliquidOrderResponse {
+    /// Top-level exchange status, usually `ok` or `err`.
     pub status: String,
     #[serde(default)]
+    /// Optional typed response body.
     pub response: Option<HyperliquidOrderResponseData>,
 }
 
+/// Nested Hyperliquid exchange response payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HyperliquidOrderResponseData {
     #[serde(rename = "type")]
+    /// Response type returned by Hyperliquid, such as `order`.
     pub response_type: String,
+    /// Optional order result data.
     pub data: Option<HyperliquidOrderData>,
 }
 
+/// Order result data containing one status per submitted order.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HyperliquidOrderData {
+    /// Per-order statuses returned in request order.
     pub statuses: Vec<HyperliquidOrderStatus>,
 }
 
+/// Status for a single submitted order.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HyperliquidOrderStatus {
+    /// Resting order details when the order entered the book.
     pub resting: Option<HyperliquidRestingOrder>,
+    /// Immediate fill details when the order executed.
     pub filled: Option<HyperliquidFilledOrder>,
+    /// Error string when the order was rejected.
     pub error: Option<String>,
 }
 
+/// Resting order response data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HyperliquidRestingOrder {
+    /// Exchange order ID.
     pub oid: u64,
 }
 
+/// Filled order response data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HyperliquidFilledOrder {
     #[serde(rename = "totalSz")]
+    /// Total filled size as a wire-format decimal string.
     pub total_sz: String,
     #[serde(rename = "avgPx")]
+    /// Average fill price as a wire-format decimal string.
     pub avg_px: String,
+    /// Exchange order ID.
     pub oid: u64,
 }
 
 /// Hyperliquid user fill from userFills endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HyperliquidUserFill {
+    /// Hyperliquid coin symbol.
     pub coin: String,
+    /// Fill price as a wire-format decimal string.
     pub px: String,
+    /// Fill size as a wire-format decimal string.
     pub sz: String,
+    /// Fill side string from Hyperliquid.
     pub side: String,
+    /// Exchange timestamp in milliseconds.
     pub time: u64,
+    /// Transaction hash associated with the fill.
     pub hash: String,
+    /// Exchange order ID.
     pub oid: u64,
+    /// Optional client order ID.
     pub cloid: Option<String>,
+    /// Fee amount as a wire-format decimal string.
     pub fee: String,
     #[serde(rename = "feeToken")]
+    /// Fee token symbol when present.
     pub fee_token: Option<String>,
+    /// Optional exchange trade ID.
     pub tid: Option<u64>,
 }
 
@@ -268,38 +296,54 @@ pub struct HyperliquidUserFill {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HyperliquidClearinghouseState {
     #[serde(rename = "marginSummary")]
+    /// Account-level margin summary.
     pub margin_summary: HyperliquidMarginSummary,
     #[serde(rename = "assetPositions")]
+    /// Per-asset positions.
     pub asset_positions: Vec<HyperliquidAssetPosition>,
 }
 
+/// Account-level Hyperliquid margin summary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HyperliquidMarginSummary {
     #[serde(rename = "accountValue")]
+    /// Account value as a wire-format decimal string.
     pub account_value: String,
     #[serde(rename = "totalMarginUsed")]
+    /// Margin currently used as a wire-format decimal string.
     pub total_margin_used: String,
     #[serde(rename = "totalNtlPos")]
+    /// Total notional position value as a wire-format decimal string.
     pub total_ntl_pos: String,
     #[serde(rename = "totalRawUsd")]
+    /// Raw USD value as a wire-format decimal string.
     pub total_raw_usd: String,
 }
 
+/// Hyperliquid asset position wrapper.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HyperliquidAssetPosition {
+    /// Position details.
     pub position: HyperliquidPosition,
     #[serde(rename = "type")]
+    /// Position category returned by the API.
     pub position_type: String,
 }
 
+/// Hyperliquid position details.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HyperliquidPosition {
+    /// Coin symbol.
     pub coin: String,
+    /// Signed position size as a wire-format decimal string.
     pub szi: String,
     #[serde(rename = "entryPx")]
+    /// Entry price as a wire-format decimal string.
     pub entry_px: Option<String>,
     #[serde(rename = "positionValue")]
+    /// Position value as a wire-format decimal string.
     pub position_value: String,
     #[serde(rename = "unrealizedPnl")]
+    /// Unrealized PnL as a wire-format decimal string.
     pub unrealized_pnl: String,
 }

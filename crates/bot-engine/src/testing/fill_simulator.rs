@@ -18,20 +18,30 @@ use std::collections::{HashMap, VecDeque};
 /// A pending order waiting to be filled
 #[derive(Debug, Clone)]
 pub struct PendingOrder {
+    /// Client order ID.
     pub client_id: ClientOrderId,
+    /// Simulated exchange order ID.
     pub exchange_order_id: ExchangeOrderId,
+    /// Instrument being traded.
     pub instrument: InstrumentId,
+    /// Order side.
     pub side: OrderSide,
+    /// Limit price.
     pub price: Price,
+    /// Original order quantity.
     pub qty: Qty,
+    /// Quantity not yet filled.
     pub remaining_qty: Qty,
+    /// Creation timestamp in milliseconds.
     pub created_at: i64,
 }
 
 /// Result of a simulated fill
 #[derive(Debug, Clone)]
 pub struct SimulatedFill {
+    /// Canonical fill emitted by the simulator.
     pub fill: Fill,
+    /// Whether this fill completed the order.
     pub order_fully_filled: bool,
 }
 
@@ -75,6 +85,7 @@ pub struct FillSimulator {
 }
 
 impl FillSimulator {
+    /// Create a simulator with initial balances and no fees.
     pub fn new(initial_balances: HashMap<AssetId, Decimal>) -> Self {
         Self {
             order_groups: HashMap::new(),
@@ -114,6 +125,7 @@ impl FillSimulator {
         );
     }
 
+    /// Return `true` when the instrument is configured or inferred as a perp.
     pub fn instrument_is_perp(&self, instrument: &InstrumentId) -> bool {
         self.assets_for(instrument).kind == InstrumentKind::Perp
     }

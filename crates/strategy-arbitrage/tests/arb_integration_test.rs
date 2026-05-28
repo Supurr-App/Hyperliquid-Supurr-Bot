@@ -913,7 +913,7 @@ fn test_unrelated_cancel_does_not_stop_strategy() {
     let config = test_config();
     let spot_instrument = config.spot_instrument();
     let spot_exchange = config.spot_exchange();
-    let perp_exchange = config.perp_exchange();
+    let _perp_exchange = config.perp_exchange();
     let mut strategy = ArbitrageStrategy::new(config);
     let mut ctx = MockContext::new();
 

@@ -11,6 +11,7 @@ pub struct Bar {
     pub low: f64,
     pub close: f64,
     /// Bar open timestamp in milliseconds.
+    #[allow(dead_code)]
     pub open_time_ms: i64,
 }
 

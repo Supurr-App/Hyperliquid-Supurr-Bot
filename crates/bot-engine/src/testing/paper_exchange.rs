@@ -17,11 +17,12 @@ use rust_decimal::Decimal;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-/// Newtype wrapper around Arc<dyn Exchange> to implement Exchange trait.
-/// This allows PaperExchange to wrap any Arc<dyn Exchange> while satisfying orphan rules.
+/// Newtype wrapper around `Arc<dyn Exchange>` to implement Exchange trait.
+/// This allows PaperExchange to wrap any `Arc<dyn Exchange>` while satisfying orphan rules.
 pub struct ArcExchange(pub Arc<dyn Exchange>);
 
 impl ArcExchange {
+    /// Wrap an exchange trait object.
     pub fn new(exchange: Arc<dyn Exchange>) -> Self {
         Self(exchange)
     }
@@ -89,6 +90,7 @@ pub struct NoOpExchange {
 }
 
 impl NoOpExchange {
+    /// Create a no-op testnet paper exchange identity.
     pub fn new() -> Self {
         Self::with_config("paper-exchange", bot_core::Environment::Testnet)
     }
@@ -284,6 +286,7 @@ impl<E: Exchange> PaperExchange<E> {
             .register_instrument_meta(meta);
     }
 
+    /// Register several instrument metadata records.
     pub async fn register_instrument_metas(&self, metas: &[InstrumentMeta]) {
         let mut state = self.state.write().await;
         for meta in metas {

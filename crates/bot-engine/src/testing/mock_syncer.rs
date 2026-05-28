@@ -1,7 +1,7 @@
 //! Mock Syncers for testing backend integration without real API calls.
 
 use async_lock::RwLock;
-use bot_core::{AccountState, PositionSnapshot};
+use bot_core::AccountState;
 use rust_decimal::Decimal;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,21 +12,33 @@ pub use bot_core::Fill;
 
 // === MockAccountSyncer (for Arbitrage/Snapshot strategies) ===
 
+/// Recorded account-sync call for assertions.
 #[derive(Debug, Clone)]
 pub struct AccountSyncCall {
+    /// Account value sent to the syncer.
     pub account_value: Decimal,
+    /// Unrealized PnL sent to the syncer.
     pub unrealized_pnl: Decimal,
+    /// Position payload sent to the syncer.
     pub positions: Vec<PositionInfo>,
+    /// Sync timestamp in seconds.
     pub ts: i64,
+    /// Whether this was a shutdown sync.
     pub stop_bot: bool,
+    /// Stop reason for shutdown syncs.
     pub stop_reason: String,
 }
 
+/// Position payload recorded by the account mock.
 #[derive(Debug, Clone)]
 pub struct PositionInfo {
+    /// Instrument ID string.
     pub instrument_id: String,
+    /// Position quantity string.
     pub qty: String,
+    /// Entry price string.
     pub entry_px: String,
+    /// Unrealized PnL string.
     pub unrealized_pnl: String,
 }
 
@@ -37,11 +49,13 @@ struct MockAccountSyncerState {
     network_delay_ms: u64,
 }
 
+/// Mock account syncer for snapshot-account strategies.
 pub struct MockAccountSyncer {
     inner: Arc<RwLock<MockAccountSyncerState>>,
 }
 
 impl MockAccountSyncer {
+    /// Create a mock account syncer.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(RwLock::new(MockAccountSyncerState {
@@ -55,28 +69,34 @@ impl MockAccountSyncer {
 
     // === KNOBS ===
 
+    /// Configure whether sync calls should fail.
     pub async fn set_should_fail(&self, should_fail: bool) {
         self.inner.write().await.should_fail = should_fail;
     }
 
+    /// Set the PnL returned by successful sync calls.
     pub async fn set_simulated_pnl(&self, pnl: f64) {
         self.inner.write().await.simulated_pnl = pnl;
     }
 
+    /// Set simulated network delay in milliseconds.
     pub async fn set_network_delay(&self, ms: u64) {
         self.inner.write().await.network_delay_ms = ms;
     }
 
     // === VERIFICATION ===
 
+    /// Return all recorded account sync calls.
     pub async fn sync_calls(&self) -> Vec<AccountSyncCall> {
         self.inner.read().await.sync_calls.clone()
     }
 
+    /// Return the latest recorded account sync call.
     pub async fn last_sync(&self) -> Option<AccountSyncCall> {
         self.inner.read().await.sync_calls.last().cloned()
     }
 
+    /// Return recorded shutdown sync calls.
     pub async fn shutdown_syncs(&self) -> Vec<AccountSyncCall> {
         self.inner
             .read()
@@ -88,12 +108,14 @@ impl MockAccountSyncer {
             .collect()
     }
 
+    /// Assert exactly one shutdown sync was recorded.
     pub async fn assert_shutdown_sync_sent(&self) {
         let shutdowns = self.shutdown_syncs().await;
         assert!(!shutdowns.is_empty(), "No shutdown sync was sent");
         assert_eq!(shutdowns.len(), 1, "Multiple shutdown syncs sent");
     }
 
+    /// Assert at least `min_count` non-shutdown syncs were recorded.
     pub async fn assert_periodic_syncs(&self, min_count: usize) {
         let state = self.inner.read().await;
         let active_syncs: Vec<_> = state.sync_calls.iter().filter(|c| !c.stop_bot).collect();
@@ -108,6 +130,7 @@ impl MockAccountSyncer {
 
     // === SYNCER IMPLEMENTATION ===
 
+    /// Record an account sync call and return the configured mock result.
     pub async fn sync(
         &mut self,
         account_state: &AccountState,
@@ -162,6 +185,7 @@ impl MockAccountSyncer {
         })
     }
 
+    /// Record a shutdown account sync call.
     pub async fn shutdown_sync(
         &mut self,
         account_state: &AccountState,
@@ -218,12 +242,18 @@ impl Default for MockAccountSyncer {
 
 // === MockTradeSyncer (for Grid/MM strategies) ===
 
+/// Recorded trade-sync call for assertions.
 #[derive(Debug, Clone)]
 pub struct TradeSyncCall {
+    /// Fills sent to the syncer.
     pub fills: Vec<Fill>,
+    /// Current market price sent with the sync.
     pub current_price: Option<Decimal>,
+    /// Whether this was a shutdown sync.
     pub stop_bot: bool,
+    /// Stop reason for shutdown syncs.
     pub stop_reason: String,
+    /// Sync timestamp in milliseconds.
     pub timestamp: i64,
 }
 
@@ -233,11 +263,13 @@ struct MockTradeSyncerState {
     simulated_pnl: f64,
 }
 
+/// Mock trade syncer for fill-based strategies.
 pub struct MockTradeSyncer {
     inner: Arc<RwLock<MockTradeSyncerState>>,
 }
 
 impl MockTradeSyncer {
+    /// Create a mock trade syncer.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(RwLock::new(MockTradeSyncerState {
@@ -250,20 +282,24 @@ impl MockTradeSyncer {
 
     // === KNOBS ===
 
+    /// Configure whether sync calls should fail.
     pub async fn set_should_fail(&self, should_fail: bool) {
         self.inner.write().await.should_fail = should_fail;
     }
 
+    /// Set the PnL returned by successful sync calls.
     pub async fn set_simulated_pnl(&self, pnl: f64) {
         self.inner.write().await.simulated_pnl = pnl;
     }
 
     // === VERIFICATION ===
 
+    /// Return all recorded trade sync calls.
     pub async fn sync_calls(&self) -> Vec<TradeSyncCall> {
         self.inner.read().await.sync_calls.clone()
     }
 
+    /// Count fills across all recorded trade sync calls.
     pub async fn total_fills_synced(&self) -> usize {
         self.inner
             .read()
@@ -274,6 +310,7 @@ impl MockTradeSyncer {
             .sum()
     }
 
+    /// Assert that the expected number of fills was synced.
     pub async fn assert_all_fills_synced(&self, expected_fills: &[Fill]) {
         let total = self.total_fills_synced().await;
         assert_eq!(
@@ -287,6 +324,7 @@ impl MockTradeSyncer {
 
     // === SYNCER IMPLEMENTATION ===
 
+    /// Record a trade sync call and return the configured mock result.
     pub async fn sync(
         &mut self,
         fills: Vec<Fill>,
@@ -372,7 +410,7 @@ impl Default for MockTradeSyncer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bot_core::InstrumentId;
+    use bot_core::{InstrumentId, PositionSnapshot};
 
     #[tokio::test]
     async fn test_account_syncer_recording() {

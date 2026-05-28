@@ -29,11 +29,16 @@ pub enum LegState {
     Idle,
 
     /// Order placed, waiting for fill
-    Placed { order_id: ClientOrderId },
+    Placed {
+        /// Client order ID of the in-flight leg order.
+        order_id: ClientOrderId,
+    },
 
     /// Order filled, holding position from current cycle
     Filled {
+        /// Client order ID of the filled leg order.
         order_id: ClientOrderId,
+        /// Entry price used for spread/PnL tracking.
         entry_price: Price,
     },
 }
@@ -71,13 +76,19 @@ pub enum ArbIntent {
     /// No active operation
     None,
     /// Opening a hedged position (buy spot, sell perp)
-    Opening { entry_spread: Decimal },
+    Opening {
+        /// Spread observed when opening orders were sent.
+        entry_spread: Decimal,
+    },
     /// Closing a hedged position (sell spot, buy perp)
     Closing,
     /// One leg filled, retrying the failed leg on each quote update
     OneLegged {
+        /// Leg that still needs to be filled.
         failed_leg: Leg,
+        /// Timestamp in milliseconds when one-legged recovery began.
         started_at_ms: i64,
+        /// Whether recovery is for a close operation.
         is_closing: bool,
     },
 }
@@ -91,8 +102,11 @@ impl Default for ArbIntent {
 /// Combined state: per-leg tracking + high-level intent
 #[derive(Debug, Clone)]
 pub struct ArbState {
+    /// Current spot leg state.
     pub spot: LegState,
+    /// Current perp leg state.
     pub perp: LegState,
+    /// Current high-level arbitrage intent.
     pub intent: ArbIntent,
 }
 
@@ -876,7 +890,9 @@ impl ArbitrageStrategy {
 /// Which leg an order belongs to
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Leg {
+    /// Spot leg.
     Spot,
+    /// Perpetual futures leg.
     Perp,
 }
 

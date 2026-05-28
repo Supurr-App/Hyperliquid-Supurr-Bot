@@ -16,6 +16,7 @@ pub enum Phase {
     /// Sell order placed, waiting for fill
     Closing,
     /// Strategy has completed (used in one-shot mode)
+    #[allow(dead_code)]
     Done,
 }
 

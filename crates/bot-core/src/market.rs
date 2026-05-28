@@ -550,9 +550,13 @@ fn validate_instrument_meta(meta: Option<&InstrumentMetaConfig>, errors: &mut Ve
 /// which expects `hip3: Option<Hip3Config>`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Hip3MarketConfig {
+    /// DEX name used by Hyperliquid API calls.
     pub dex_name: String,
+    /// One-based DEX index from Hyperliquid `perpDexs`.
     pub dex_index: u32,
+    /// Collateral/quote currency used by the HIP-3 DEX.
     pub quote_currency: String,
+    /// Asset index inside the DEX universe.
     pub asset_index: u32,
 }
 

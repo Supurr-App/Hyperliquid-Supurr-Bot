@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+include.workspace = true
 description = "Grid trading strategy with LONG, SHORT, and NEUTRAL modes"
 
 [dependencies]
@@ -16,6 +19,5 @@ schemars = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-bot-engine = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

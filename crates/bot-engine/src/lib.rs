@@ -53,11 +53,18 @@ pub use poll_guard::*;
 
 // Re-exports (native-only)
 #[cfg(feature = "native")]
-pub use account_syncer::*;
+pub use account_syncer::{
+    AccountSyncer, AccountSyncerConfig, ClearingHouseStateRequest,
+    PositionInfo as AccountPositionInfo, SyncError, SyncResponse as AccountSyncerResponse,
+    SyncResult as AccountSyncerResult,
+};
 #[cfg(feature = "native")]
 pub use sync_traits::{AccountSync, AccountSyncResult, TradeSync, TradeSyncResult};
 #[cfg(feature = "native")]
-pub use trade_syncer::*;
+pub use trade_syncer::{
+    SyncRequest as TradeSyncRequest, SyncResponse as TradeSyncerResponse,
+    SyncResult as TradeSyncerResult, SyncedInfo, TradeSyncer, TradeSyncerConfig, UpstreamTrade,
+};
 
 // Re-exports (runner - core types always available, spawn functions native-only)
 #[cfg(feature = "native")]

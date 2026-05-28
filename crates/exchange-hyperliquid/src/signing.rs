@@ -14,12 +14,16 @@ use sha3::{Digest, Keccak256};
 use thiserror::Error;
 use tracing;
 
+/// Errors produced while preparing or signing Hyperliquid actions.
 #[derive(Debug, Error)]
 pub enum SigningError {
+    /// Private key or address parsing failed.
     #[error("Invalid private key: {0}")]
     InvalidPrivateKey(String),
+    /// Wallet signing failed.
     #[error("Signing failed: {0}")]
     SigningFailed(String),
+    /// Msgpack encoding of the action failed.
     #[error("Msgpack encoding failed: {0}")]
     MsgpackError(String),
 }
@@ -27,12 +31,16 @@ pub enum SigningError {
 /// Signature components for Hyperliquid API
 #[derive(Debug, Clone)]
 pub struct HyperliquidSignature {
+    /// ECDSA `r` component as `0x`-prefixed hex.
     pub r: String,
+    /// ECDSA `s` component as `0x`-prefixed hex.
     pub s: String,
+    /// Recovery ID.
     pub v: u8,
 }
 
 impl HyperliquidSignature {
+    /// Convert signature components into Hyperliquid's JSON shape.
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "r": self.r,
@@ -45,6 +53,7 @@ impl HyperliquidSignature {
 /// Hyperliquid signer that handles EIP-712 signing
 pub struct HyperliquidSigner {
     wallet: LocalWallet,
+    /// Ethereum address derived from the signer private key.
     pub address: Address,
     is_mainnet: bool,
 }
@@ -346,7 +355,11 @@ pub fn decimal_to_wire(x: &rust_decimal::Decimal) -> String {
     }
 }
 
-/// Get current timestamp in milliseconds
+/// Get current timestamp in milliseconds.
+///
+/// # Panics
+///
+/// Panics if the host system clock is set before the Unix epoch.
 pub fn timestamp_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

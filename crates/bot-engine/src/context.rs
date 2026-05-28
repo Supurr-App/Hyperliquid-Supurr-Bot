@@ -16,37 +16,55 @@ static TIMER_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Pending timer registration
 pub struct PendingTimer {
+    /// Engine-assigned timer ID.
     pub id: TimerId,
+    /// Delay before the timer fires.
     pub delay: Duration,
+    /// Whether the timer repeats after firing.
     pub repeating: bool,
 }
 
 /// Concrete implementation of StrategyContext
 pub struct EngineContext<'a> {
     // Command buffers (collected during event handling, executed after)
+    /// Single-order commands emitted during the current callback.
     pub place_orders: Vec<PlaceOrder>,
+    /// Batch order commands emitted during the current callback.
     pub batch_orders: Vec<Vec<PlaceOrder>>,
+    /// Cancel-one commands emitted during the current callback.
     pub cancel_orders: Vec<CancelOrder>,
+    /// Cancel-all commands emitted during the current callback.
     pub cancel_alls: Vec<CancelAll>,
+    /// Strategy stop requests emitted during the current callback.
     pub stop_requests: Vec<StopStrategy>,
 
     // Timer registrations
+    /// Timer registrations emitted during the current callback.
     pub timers: Vec<PendingTimer>,
+    /// Timer cancellations emitted during the current callback.
     pub canceled_timers: Vec<TimerId>,
 
     // Read-only references to engine state
+    /// Latest quotes by instrument.
     pub quotes: &'a HashMap<InstrumentId, Quote>,
+    /// Instrument metadata by instrument.
     pub instruments: &'a HashMap<InstrumentId, InstrumentMeta>,
+    /// Order manager snapshot.
     pub orders: &'a OrderManager,
+    /// Inventory ledger snapshot.
     pub inventory: &'a InventoryLedger,
+    /// Current positions by instrument.
     pub positions: &'a HashMap<InstrumentId, Position>,
+    /// Exchange health by exchange instance.
     pub exchange_health: &'a HashMap<ExchangeInstance, ExchangeHealth>,
 
     // Current time
+    /// Engine clock in milliseconds since the Unix epoch.
     pub now_ms: i64,
 }
 
 impl<'a> EngineContext<'a> {
+    /// Create an engine context for one strategy callback.
     pub fn new(
         quotes: &'a HashMap<InstrumentId, Quote>,
         instruments: &'a HashMap<InstrumentId, InstrumentMeta>,

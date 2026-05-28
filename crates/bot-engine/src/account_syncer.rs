@@ -15,7 +15,7 @@ use crate::performance_metrics::PerformanceMetricsSnapshot;
 pub struct AccountSyncerConfig {
     /// Bot ID for upstream API
     pub bot_id: String,
-    /// Upstream API base URL (e.g., "https://api.example.com/bot-api")
+    /// Upstream API base URL (e.g., `<https://api.example.com/bot-api>`)
     pub upstream_url: String,
     /// Sync interval in milliseconds (default: 10000)
     pub sync_interval_ms: u64,
@@ -46,11 +46,17 @@ impl Default for AccountSyncerConfig {
 /// Request payload for clearinghouse state sync API
 #[derive(Debug, Clone, Serialize)]
 pub struct ClearingHouseStateRequest {
+    /// Account value as a decimal string.
     pub account_value: String,
+    /// Unrealized PnL as a decimal string.
     pub unrealized_pnl: String,
+    /// Position payloads.
     pub positions: Vec<PositionInfo>,
+    /// Timestamp in seconds.
     pub ts: i64,
+    /// Whether this request marks bot shutdown.
     pub stop_bot: bool,
+    /// Shutdown reason when `stop_bot` is true.
     pub stop_reason: String,
     /// Optional metadata for strategy-specific data
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -60,36 +66,52 @@ pub struct ClearingHouseStateRequest {
 /// Position information for sync
 #[derive(Debug, Clone, Serialize)]
 pub struct PositionInfo {
+    /// Instrument ID.
     pub instrument_id: String,
+    /// Position quantity string.
     pub qty: String,
+    /// Entry price string.
     pub entry_px: String,
+    /// Unrealized PnL string.
     pub unrealized_pnl: String,
 }
 
 /// Response from clearinghouse state sync API
 #[derive(Debug, Clone, Deserialize)]
 pub struct SyncResponse {
+    /// Upstream-calculated PnL.
     pub pnl: f64,
 }
 
 /// Error types for account syncing
 #[derive(Debug, thiserror::Error)]
 pub enum SyncError {
+    /// HTTP request failed after construction.
     #[error("HTTP request failed: {0}")]
     Http(String),
 
+    /// Network transport failure.
     #[error("Network error: {0}")]
     Network(String),
 
+    /// Response parsing failed.
     #[error("Parse error: {0}")]
     Parse(String),
 
+    /// Upstream API returned a non-success status.
     #[error("API error: status={status}, body={body}")]
-    Api { status: u16, body: String },
+    Api {
+        /// HTTP status code.
+        status: u16,
+        /// Response body.
+        body: String,
+    },
 
+    /// Invalid syncer configuration.
     #[error("Configuration error: {0}")]
     Config(String),
 
+    /// Retry policy was exhausted.
     #[error("Max retries exceeded")]
     MaxRetries,
 }
@@ -109,7 +131,9 @@ impl From<reqwest::Error> for SyncError {
 /// Result of a sync operation
 #[derive(Debug, Clone)]
 pub struct SyncResult {
+    /// Whether the upstream sync succeeded.
     pub success: bool,
+    /// Upstream-calculated PnL, if returned.
     pub pnl: Option<f64>,
 }
 
@@ -162,6 +186,7 @@ impl AccountSyncer {
         self.last_pnl
     }
 
+    /// Set the latest performance metrics snapshot for sync metadata.
     pub fn set_metrics_snapshot(&mut self, snapshot: Option<PerformanceMetricsSnapshot>) {
         self.metrics_snapshot = snapshot;
     }

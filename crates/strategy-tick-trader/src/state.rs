@@ -17,6 +17,7 @@ pub enum Phase {
     Done,
 }
 
+/// Runtime state for tick-count entry/exit tracking.
 pub struct TickTraderState {
     /// Current phase
     pub phase: Phase,
@@ -29,6 +30,7 @@ pub struct TickTraderState {
 }
 
 impl TickTraderState {
+    /// Create empty runtime state.
     pub fn new() -> Self {
         Self {
             phase: Phase::WaitingToOpen,

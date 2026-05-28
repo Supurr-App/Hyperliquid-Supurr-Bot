@@ -23,21 +23,24 @@ default-members = [
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
-authors = ["Your Name <you@example.com>"]
+authors = ["Supurr"]
 license = "MIT"
+homepage = "https://supurr.app"
+repository = "https://github.com/Supurr-App/Supurr-Bot"
+include = ["Cargo.toml", "src/**/*.rs"]
 
 [workspace.dependencies]
 # Internal crates
-bot-core = { path = "crates/bot-core" }
-bot-engine = { path = "crates/bot-engine" }
-bot-orchestrator = { path = "crates/bot-orchestrator" }
-exchange-hyperliquid = { path = "crates/exchange-hyperliquid" }
-strategy-market-maker = { path = "crates/strategy-market-maker" }
-strategy-tick-trader = { path = "crates/strategy-tick-trader" }
-strategy-grid = { path = "crates/strategy-grid" }
-strategy-dca = { path = "crates/strategy-dca" }
-strategy-arbitrage = { path = "crates/strategy-arbitrage" }
-strategy-rsi = { path = "crates/strategy-rsi" }
+bot-core = { path = "crates/bot-core", version = "0.1.0" }
+bot-engine = { path = "crates/bot-engine", version = "0.1.0" }
+bot-orchestrator = { path = "crates/bot-orchestrator", version = "0.1.0" }
+exchange-hyperliquid = { path = "crates/exchange-hyperliquid", version = "0.1.0" }
+strategy-market-maker = { path = "crates/strategy-market-maker", version = "0.1.0" }
+strategy-tick-trader = { path = "crates/strategy-tick-trader", version = "0.1.0" }
+strategy-grid = { path = "crates/strategy-grid", version = "0.1.0" }
+strategy-dca = { path = "crates/strategy-dca", version = "0.1.0" }
+strategy-arbitrage = { path = "crates/strategy-arbitrage", version = "0.1.0" }
+strategy-rsi = { path = "crates/strategy-rsi", version = "0.1.0" }
 
 # Async runtime
 tokio = { version = "1.40", features = ["rt-multi-thread", "sync", "time", "macros", "signal"] }

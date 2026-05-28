@@ -32,35 +32,55 @@ fn is_cumulative_address_limit_error(reason: &str) -> bool {
 /// Response types from Hyperliquid API (info endpoints)
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct HyperliquidUserFill {
+    /// Hyperliquid coin symbol as returned by `userFills`.
     pub coin: String,
+    /// Fill price as a wire-format decimal string.
     pub px: String,
+    /// Fill size as a wire-format decimal string.
     pub sz: String,
+    /// Fill side string from Hyperliquid.
     pub side: String,
+    /// Exchange timestamp in milliseconds.
     pub time: u64,
+    /// Transaction hash associated with the fill.
     pub hash: String,
+    /// Exchange order ID.
     pub oid: u64,
     #[serde(default)]
+    /// Optional exchange trade ID.
     pub tid: Option<u64>,
     #[serde(default)]
+    /// Fee amount as a wire-format decimal string.
     pub fee: String,
     #[serde(rename = "feeToken", default)]
+    /// Fee token symbol when the endpoint includes it.
     pub fee_token: Option<String>,
     #[serde(default)]
+    /// Optional client order ID.
     pub cloid: Option<String>,
     #[serde(rename = "closedPnl", default)]
+    /// Closed PnL string for fills that close position size.
     pub closed_pnl: Option<String>,
 }
 
+/// Open order returned by Hyperliquid info endpoints.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct HyperliquidOrder {
+    /// Hyperliquid coin symbol.
     pub coin: String,
+    /// Order side string.
     pub side: String,
     #[serde(rename = "limitPx")]
+    /// Limit price as a wire-format decimal string.
     pub limit_px: String,
+    /// Order size as a wire-format decimal string.
     pub sz: String,
+    /// Exchange order ID.
     pub oid: u64,
+    /// Exchange timestamp in milliseconds.
     pub timestamp: u64,
     #[serde(default)]
+    /// Optional client order ID.
     pub cloid: Option<String>,
 }
 
@@ -85,6 +105,12 @@ pub struct HyperliquidClient {
 }
 
 impl HyperliquidClient {
+    /// Create a Hyperliquid HTTP client from configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExchangeError::Configuration`] if the private key is invalid or
+    /// the HTTP client cannot be constructed.
     pub fn new(config: HyperliquidConfig) -> Result<Self, ExchangeError> {
         let is_mainnet = config.environment == Environment::Mainnet;
 
@@ -1415,22 +1441,30 @@ impl HyperliquidClient {
                     continue;
                 }
 
-                let outcome_coin = coin
-                    .strip_prefix('+')
-                    .map(|encoding| format!("#{}", encoding))
-                    .or_else(|| coin.starts_with('#').then(|| coin.to_string()));
                 let is_configured_outcome = configured_outcome_coin.as_deref() == Some(coin)
                     || configured_outcome_token.as_deref() == Some(coin);
-                let instrument = if let Some(outcome_coin) = outcome_coin {
-                    InstrumentId::new(format!("{}-OUTCOME", outcome_coin))
-                } else if is_configured_outcome {
-                    InstrumentId::new(format!(
-                        "{}-OUTCOME",
-                        configured_outcome_coin.as_deref().unwrap_or(coin)
-                    ))
-                } else if self.config.is_outcome || coin.starts_with('#') {
-                    continue;
-                } else if self.config.is_spot && configured_spot_coin != Some(coin) {
+                let instrument = if self.config.is_outcome {
+                    let outcome_coin = coin
+                        .strip_prefix('+')
+                        .map(|encoding| format!("#{}", encoding))
+                        .or_else(|| coin.starts_with('#').then(|| coin.to_string()));
+
+                    if let Some(outcome_coin) = outcome_coin {
+                        InstrumentId::new(format!("{}-OUTCOME", outcome_coin))
+                    } else if is_configured_outcome {
+                        InstrumentId::new(format!(
+                            "{}-OUTCOME",
+                            configured_outcome_coin.as_deref().unwrap_or(coin)
+                        ))
+                    } else {
+                        continue;
+                    }
+                } else if self.config.is_spot {
+                    if configured_spot_coin != Some(coin) {
+                        continue;
+                    }
+                    InstrumentId::new(format!("{}-SPOT", coin))
+                } else if coin.starts_with('#') {
                     continue;
                 } else {
                     InstrumentId::new(format!("{}-SPOT", coin))

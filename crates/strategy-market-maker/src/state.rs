@@ -38,6 +38,7 @@ pub struct SideState {
 }
 
 impl SideState {
+    /// Create an empty side state.
     pub fn new() -> Self {
         Self::default()
     }
@@ -121,30 +122,42 @@ impl Default for SkewAdjustments {
 #[derive(Debug, Clone)]
 pub struct MarketMakerState {
     // Price tracking
+    /// Latest mid price observed from quotes.
     pub mid_price: Option<Price>,
+    /// Mid price used for the last order refresh.
     pub last_refresh_price: Option<Price>,
+    /// Last timestamp when status was logged.
     pub last_log_ts: i64,
 
     // Position tracking
+    /// Current signed position quantity.
     pub current_position: Decimal,
 
     // Order tracking with state machine
+    /// Buy-side order state.
     pub buy_side: SideState,
+    /// Sell-side order state.
     pub sell_side: SideState,
 
     // Order registry for lookups: ClientOrderId -> OrderSide
+    /// Client order ID to order side lookup table.
     pub order_registry: HashMap<String, OrderSide>,
 
     // Computed values (cached for logging)
+    /// Cached inventory metrics from the current position.
     pub inventory_metrics: InventoryMetrics,
+    /// Cached skew values derived from inventory.
     pub skew_adjustments: SkewAdjustments,
 
     // Exit state
+    /// Reason the strategy should stop, if one has been triggered.
     pub exit_reason: Option<String>,
+    /// Latest PnL observed from engine position state.
     pub current_pnl: Option<Decimal>,
 }
 
 impl MarketMakerState {
+    /// Create empty market-maker state.
     pub fn new() -> Self {
         Self {
             mid_price: None,

@@ -15,10 +15,21 @@ use uuid::Uuid;
 pub struct ExchangeId(pub String);
 
 impl ExchangeId {
+    /// Build an exchange identifier from a string-like value.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use bot_core::ExchangeId;
+    ///
+    /// let id = ExchangeId::new("hyperliquid");
+    /// assert_eq!(id.as_str(), "hyperliquid");
+    /// ```
     pub fn new(s: impl Into<String>) -> Self {
         Self(s.into())
     }
 
+    /// Borrow the exchange identifier as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -33,7 +44,9 @@ impl fmt::Display for ExchangeId {
 /// Environment (mainnet vs testnet)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum Environment {
+    /// Production exchange environment.
     Mainnet,
+    /// Test or sandbox exchange environment.
     Testnet,
 }
 
@@ -49,11 +62,23 @@ impl fmt::Display for Environment {
 /// Unique key for an exchange instance: (exchange_id, environment)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ExchangeInstance {
+    /// Exchange family, such as `hyperliquid`.
     pub exchange_id: ExchangeId,
+    /// Mainnet/testnet environment.
     pub environment: Environment,
 }
 
 impl ExchangeInstance {
+    /// Build an exchange instance key.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use bot_core::{Environment, ExchangeId, ExchangeInstance};
+    ///
+    /// let instance = ExchangeInstance::new(ExchangeId::new("hyperliquid"), Environment::Mainnet);
+    /// assert_eq!(instance.to_string(), "hyperliquid:mainnet");
+    /// ```
     pub fn new(exchange_id: ExchangeId, environment: Environment) -> Self {
         Self {
             exchange_id,
@@ -73,10 +98,21 @@ impl fmt::Display for ExchangeInstance {
 pub struct InstrumentId(pub String);
 
 impl InstrumentId {
+    /// Build an instrument identifier from a string-like value.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use bot_core::InstrumentId;
+    ///
+    /// let instrument = InstrumentId::new("BTC-PERP");
+    /// assert_eq!(instrument.as_str(), "BTC-PERP");
+    /// ```
     pub fn new(s: impl Into<String>) -> Self {
         Self(s.into())
     }
 
+    /// Borrow the instrument identifier as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -93,10 +129,12 @@ impl fmt::Display for InstrumentId {
 pub struct MarketIndex(pub u32);
 
 impl MarketIndex {
+    /// Build an exchange-specific market index.
     pub fn new(index: u32) -> Self {
         Self(index)
     }
 
+    /// Return the raw index value.
     pub fn value(&self) -> u32 {
         self.0
     }
@@ -107,6 +145,9 @@ impl MarketIndex {
 pub struct ClientOrderId(pub String);
 
 impl ClientOrderId {
+    /// Build a client order ID from a known value.
+    ///
+    /// Use [`ClientOrderId::generate`] for new live orders.
     pub fn new(s: impl Into<String>) -> Self {
         Self(s.into())
     }
@@ -116,6 +157,7 @@ impl ClientOrderId {
         Self(format!("0x{}", Uuid::new_v4().as_simple()))
     }
 
+    /// Borrow the client order ID as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -132,10 +174,12 @@ impl fmt::Display for ClientOrderId {
 pub struct ExchangeOrderId(pub String);
 
 impl ExchangeOrderId {
+    /// Build an exchange order ID from an exchange-supplied value.
     pub fn new(s: impl Into<String>) -> Self {
         Self(s.into())
     }
 
+    /// Borrow the exchange order ID as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -152,10 +196,12 @@ impl fmt::Display for ExchangeOrderId {
 pub struct TradeId(pub String);
 
 impl TradeId {
+    /// Build a trade ID from an exchange-supplied or derived value.
     pub fn new(s: impl Into<String>) -> Self {
         Self(s.into())
     }
 
+    /// Borrow the trade ID as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -172,10 +218,21 @@ impl fmt::Display for TradeId {
 pub struct StrategyId(pub String);
 
 impl StrategyId {
+    /// Build a strategy identifier.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use bot_core::StrategyId;
+    ///
+    /// let id = StrategyId::new("grid-1");
+    /// assert_eq!(id.as_str(), "grid-1");
+    /// ```
     pub fn new(s: impl Into<String>) -> Self {
         Self(s.into())
     }
 
+    /// Borrow the strategy ID as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -192,6 +249,7 @@ impl fmt::Display for StrategyId {
 pub struct TimerId(pub u64);
 
 impl TimerId {
+    /// Build a timer identifier from an engine-assigned integer.
     pub fn new(id: u64) -> Self {
         Self(id)
     }
@@ -206,14 +264,31 @@ impl TimerId {
 pub struct Price(pub Decimal);
 
 impl Price {
+    /// Wrap a decimal as a price.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use bot_core::Price;
+    /// use rust_decimal::Decimal;
+    ///
+    /// let price = Price::new(Decimal::new(65_000, 0));
+    /// assert_eq!(price.value(), Decimal::new(65_000, 0));
+    /// ```
     pub fn new(d: Decimal) -> Self {
         Self(d)
     }
 
+    /// Parse a decimal string into a price.
+    ///
+    /// # Errors
+    ///
+    /// Returns `rust_decimal::Error` if `s` is not a valid decimal.
     pub fn from_str(s: &str) -> Result<Self, rust_decimal::Error> {
         Ok(Self(s.parse()?))
     }
 
+    /// Return the wrapped decimal value.
     pub fn value(&self) -> Decimal {
         self.0
     }
@@ -273,18 +348,36 @@ impl From<Decimal> for Price {
 pub struct Qty(pub Decimal);
 
 impl Qty {
+    /// Wrap a decimal as a quantity.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use bot_core::Qty;
+    /// use rust_decimal::Decimal;
+    ///
+    /// let qty = Qty::new(Decimal::new(25, 2));
+    /// assert_eq!(qty.value(), Decimal::new(25, 2));
+    /// ```
     pub fn new(d: Decimal) -> Self {
         Self(d)
     }
 
+    /// Parse a decimal string into a quantity.
+    ///
+    /// # Errors
+    ///
+    /// Returns `rust_decimal::Error` if `s` is not a valid decimal.
     pub fn from_str(s: &str) -> Result<Self, rust_decimal::Error> {
         Ok(Self(s.parse()?))
     }
 
+    /// Return the wrapped decimal value.
     pub fn value(&self) -> Decimal {
         self.0
     }
 
+    /// Return `true` when the quantity is exactly zero.
     pub fn is_zero(&self) -> bool {
         self.0.is_zero()
     }
@@ -349,10 +442,12 @@ impl std::ops::AddAssign for Qty {
 pub struct AssetId(pub String);
 
 impl AssetId {
+    /// Build an asset identifier from a string-like value.
     pub fn new(s: impl Into<String>) -> Self {
         Self(s.into())
     }
 
+    /// Borrow the asset ID as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -367,12 +462,16 @@ impl fmt::Display for AssetId {
 /// Balance for an asset
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Balance {
+    /// Total balance, including funds reserved for open orders.
     pub total: Decimal,
+    /// Balance immediately available for new orders or withdrawals.
     pub available: Decimal,
+    /// Balance currently reserved by open orders or other locks.
     pub reserved: Decimal,
 }
 
 impl Balance {
+    /// Build a balance from total, available, and reserved amounts.
     pub fn new(total: Decimal, available: Decimal, reserved: Decimal) -> Self {
         Self {
             total,
@@ -381,6 +480,7 @@ impl Balance {
         }
     }
 
+    /// Return a zero balance.
     pub fn zero() -> Self {
         Self::default()
     }
@@ -389,15 +489,19 @@ impl Balance {
 /// Fee amount + currency
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Fee {
+    /// Fee amount charged.
     pub amount: Decimal,
+    /// Asset in which the fee was charged.
     pub asset: AssetId,
 }
 
 impl Fee {
+    /// Build a fee from amount and asset.
     pub fn new(amount: Decimal, asset: AssetId) -> Self {
         Self { amount, asset }
     }
 
+    /// Build a zero fee for an asset.
     pub fn zero(asset: AssetId) -> Self {
         Self {
             amount: Decimal::ZERO,
@@ -413,13 +517,16 @@ impl Fee {
 /// Instrument kind
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InstrumentKind {
+    /// Spot market.
     Spot,
+    /// Perpetual futures market.
     Perp,
     /// Prediction market outcome.
     Outcome,
 }
 
 impl InstrumentKind {
+    /// Return `true` for markets that settle like spot without margin.
     pub fn is_spot_like(self) -> bool {
         matches!(self, Self::Spot | Self::Outcome)
     }
@@ -428,15 +535,25 @@ impl InstrumentKind {
 /// Instrument metadata (provided by you, not discovered)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstrumentMeta {
+    /// Canonical instrument ID.
     pub instrument_id: InstrumentId,
+    /// Exchange-specific market index or encoded asset ID.
     pub market_index: MarketIndex,
+    /// Base asset.
     pub base_asset: AssetId,
+    /// Quote asset.
     pub quote_asset: AssetId,
+    /// Minimum price increment.
     pub tick_size: Decimal,
+    /// Minimum quantity increment.
     pub lot_size: Decimal,
+    /// Optional minimum order quantity.
     pub min_qty: Option<Decimal>,
+    /// Optional minimum order notional.
     pub min_notional: Option<Decimal>,
+    /// Default fee asset when the exchange does not report one.
     pub fee_asset_default: Option<AssetId>,
+    /// Instrument category.
     pub kind: InstrumentKind,
 }
 
@@ -465,11 +582,22 @@ impl InstrumentMeta {
 /// Order side
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum OrderSide {
+    /// Buy side.
     Buy,
+    /// Sell side.
     Sell,
 }
 
 impl OrderSide {
+    /// Return the opposite side.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use bot_core::OrderSide;
+    ///
+    /// assert_eq!(OrderSide::Buy.opposite(), OrderSide::Sell);
+    /// ```
     pub fn opposite(&self) -> Self {
         match self {
             Self::Buy => Self::Sell,
@@ -490,7 +618,9 @@ impl fmt::Display for OrderSide {
 /// Order type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrderType {
+    /// Limit order.
     Limit,
+    /// Market order.
     Market,
 }
 
@@ -529,6 +659,7 @@ pub enum OrderStatus {
 }
 
 impl OrderStatus {
+    /// Return `true` when the order can no longer change state.
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Filled | Self::Canceled | Self::Rejected)
     }
@@ -537,24 +668,37 @@ impl OrderStatus {
 /// Live order (engine's view of an order)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LiveOrder {
+    /// Client order ID generated by the bot.
     pub client_id: ClientOrderId,
+    /// Exchange-assigned order ID, if known.
     pub exchange_order_id: Option<ExchangeOrderId>,
+    /// Instrument being traded.
     pub instrument: InstrumentId,
+    /// Buy or sell side.
     pub side: OrderSide,
+    /// Limit price.
     pub price: Price,
+    /// Original requested quantity.
     pub requested_qty: Qty,
+    /// Quantity filled so far.
     pub filled_qty: Qty,
+    /// Average fill price for filled quantity.
     pub avg_fill_px: Option<Price>,
+    /// Current engine-owned order status.
     pub status: OrderStatus,
+    /// Creation timestamp in milliseconds since the Unix epoch.
     pub ts_created: i64,
+    /// Last update timestamp in milliseconds since the Unix epoch.
     pub ts_last_update: i64,
 }
 
 impl LiveOrder {
+    /// Return requested quantity minus filled quantity.
     pub fn remaining_qty(&self) -> Qty {
         Qty(self.requested_qty.0 - self.filled_qty.0)
     }
 
+    /// Return `true` if filled quantity is at least requested quantity.
     pub fn is_complete(&self) -> bool {
         self.filled_qty.0 >= self.requested_qty.0
     }
@@ -567,16 +711,22 @@ impl LiveOrder {
 /// Position side (for display/logic)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PositionSide {
+    /// Positive signed quantity.
     Long,
+    /// Negative signed quantity.
     Short,
+    /// Zero signed quantity.
     Flat,
 }
 
 /// Position for an instrument (signed qty: positive=long, negative=short)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Position {
+    /// Signed quantity: positive is long, negative is short.
     pub qty: Decimal, // signed: positive=long, negative=short
+    /// Average entry price when a position is open.
     pub avg_entry_px: Option<Price>,
+    /// Current unrealized PnL when available.
     pub unrealized_pnl: Option<Decimal>,
     /// Accumulated realized PnL from closed trades
     #[serde(default)]
@@ -587,6 +737,7 @@ pub struct Position {
 }
 
 impl Position {
+    /// Derive display side from signed quantity.
     pub fn side(&self) -> PositionSide {
         if self.qty > Decimal::ZERO {
             PositionSide::Long
@@ -597,10 +748,12 @@ impl Position {
         }
     }
 
+    /// Return `true` when signed quantity is zero.
     pub fn is_flat(&self) -> bool {
         self.qty.is_zero()
     }
 
+    /// Return the absolute quantity.
     pub fn abs_qty(&self) -> Decimal {
         self.qty.abs()
     }
@@ -633,17 +786,24 @@ impl Default for SyncMechanism {
 /// Account state snapshot (absolute)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountState {
+    /// Absolute position snapshots by instrument.
     pub positions: Vec<PositionSnapshot>,
+    /// Total account value when the exchange reports one.
     pub account_value: Option<Decimal>,
+    /// Account-level unrealized PnL when available.
     pub unrealized_pnl: Option<Decimal>,
 }
 
 /// Snapshot of a single position
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PositionSnapshot {
+    /// Instrument for the position.
     pub instrument: InstrumentId,
+    /// Signed quantity: positive is long, negative is short.
     pub qty: Decimal,
+    /// Average entry price when available.
     pub avg_entry_px: Option<Price>,
+    /// Current unrealized PnL when available.
     pub unrealized_pnl: Option<Decimal>,
     /// Liquidation price for this position (if available).
     /// - Live: from Hyperliquid's `clearinghouseState` (`liquidationPx`)
@@ -677,23 +837,52 @@ impl Default for ExchangeHealth {
 /// Best bid/ask quote
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Quote {
+    /// Instrument whose book is quoted.
     pub instrument: InstrumentId,
+    /// Best bid price.
     pub bid: Price,
+    /// Best ask price.
     pub ask: Price,
+    /// Quantity resting at the best bid.
     pub bid_size: Qty,
+    /// Quantity resting at the best ask.
     pub ask_size: Qty,
+    /// Quote timestamp in milliseconds since the Unix epoch.
     pub ts: i64,
 }
 
 impl Quote {
+    /// Return the arithmetic midpoint between bid and ask.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use bot_core::{InstrumentId, Price, Qty, Quote};
+    /// use rust_decimal::Decimal;
+    ///
+    /// let quote = Quote {
+    ///     instrument: InstrumentId::new("BTC-PERP"),
+    ///     bid: Price::new(Decimal::new(99, 0)),
+    ///     ask: Price::new(Decimal::new(101, 0)),
+    ///     bid_size: Qty::new(Decimal::ONE),
+    ///     ask_size: Qty::new(Decimal::ONE),
+    ///     ts: 1,
+    /// };
+    ///
+    /// assert_eq!(quote.mid().value(), Decimal::new(100, 0));
+    /// ```
     pub fn mid(&self) -> Price {
         Price((self.bid.0 + self.ask.0) / Decimal::TWO)
     }
 
+    /// Return ask minus bid.
     pub fn spread(&self) -> Decimal {
         self.ask.0 - self.bid.0
     }
 
+    /// Return the spread in basis points relative to the midpoint.
+    ///
+    /// Returns zero when the bid is zero.
     pub fn spread_bps(&self) -> Decimal {
         if self.bid.0.is_zero() {
             return Decimal::ZERO;
@@ -707,7 +896,11 @@ impl Quote {
 // Timestamp helpers
 // =============================================================================
 
-/// Get current timestamp in milliseconds
+/// Get the current timestamp in milliseconds.
+///
+/// # Panics
+///
+/// Panics if the host system clock is set before the Unix epoch.
 #[cfg(not(feature = "wasm"))]
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -716,7 +909,7 @@ pub fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-/// Get current timestamp in milliseconds (WASM version using js_sys)
+/// Get the current timestamp in milliseconds in WASM using `js_sys::Date`.
 #[cfg(feature = "wasm")]
 pub fn now_ms() -> i64 {
     js_sys::Date::now() as i64

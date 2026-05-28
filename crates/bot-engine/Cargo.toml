@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+include.workspace = true
 description = "Trading bot engine: order manager, inventory, event routing"
 
 [package.metadata.wasm-pack.profile.release]
@@ -37,12 +40,12 @@ anyhow = { workspace = true }
 schemars = { workspace = true }
 
 # Strategy dependencies (optional, enabled by features)
-strategy-grid = { path = "../strategy-grid", optional = true }
-strategy-dca = { path = "../strategy-dca", optional = true }
-strategy-market-maker = { path = "../strategy-market-maker", optional = true }
-strategy-arbitrage = { path = "../strategy-arbitrage", optional = true }
-strategy-tick-trader = { path = "../strategy-tick-trader", optional = true }
-strategy-rsi = { path = "../strategy-rsi", optional = true }
+strategy-grid = { path = "../strategy-grid", version = "0.1.0", optional = true }
+strategy-dca = { path = "../strategy-dca", version = "0.1.0", optional = true }
+strategy-market-maker = { path = "../strategy-market-maker", version = "0.1.0", optional = true }
+strategy-arbitrage = { path = "../strategy-arbitrage", version = "0.1.0", optional = true }
+strategy-tick-trader = { path = "../strategy-tick-trader", version = "0.1.0", optional = true }
+strategy-rsi = { path = "../strategy-rsi", version = "0.1.0", optional = true }
 
 # Native-only dependencies (optional)
 tokio = { workspace = true, optional = true }

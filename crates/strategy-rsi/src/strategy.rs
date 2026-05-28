@@ -14,6 +14,11 @@ use crate::state::{Phase, RsiState};
 use bot_core::*;
 use rust_decimal::prelude::ToPrimitive;
 
+/// RSI-driven strategy that opens and closes positions from quote-derived bars.
+///
+/// The top-level bot config supplies the market and environment separately from
+/// [`RsiStrategyConfig`] so the same strategy config can be reused across
+/// deployment targets.
 pub struct RsiStrategy {
     config: RsiStrategyConfig,
     state: RsiState,
@@ -27,6 +32,35 @@ pub struct RsiStrategy {
 }
 
 impl RsiStrategy {
+    /// Create an RSI strategy for one market/environment pair.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use bot_core::{Environment, HyperliquidMarket, Market, StrategyId};
+    /// use rust_decimal::Decimal;
+    /// use strategy_rsi::{RsiStrategy, RsiStrategyConfig};
+    ///
+    /// let config = RsiStrategyConfig {
+    ///     strategy_id: StrategyId::new("rsi-btc"),
+    ///     rsi_period: 14,
+    ///     bar_interval_secs: 60,
+    ///     oversold: 30.0,
+    ///     overbought: 70.0,
+    ///     order_size: Decimal::new(1, 3),
+    ///     order_notional_quote: None,
+    ///     side: "long".to_string(),
+    ///     leverage: Decimal::ONE,
+    /// };
+    /// let market = Market::Hyperliquid(HyperliquidMarket::Perp {
+    ///     base: "BTC".to_string(),
+    ///     quote: "USDC".to_string(),
+    ///     index: 0,
+    ///     instrument_meta: None,
+    /// });
+    ///
+    /// let _strategy = RsiStrategy::new(config, market, Environment::Testnet);
+    /// ```
     pub fn new(config: RsiStrategyConfig, market: Market, environment: Environment) -> Self {
         let rsi = Rsi::new(config.rsi_period as usize);
 

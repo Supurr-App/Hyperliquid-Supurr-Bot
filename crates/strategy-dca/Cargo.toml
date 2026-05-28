@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+include.workspace = true
 description = "DCA (Dollar Cost Averaging) trading strategy with Long/Short modes"
 
 [dependencies]
@@ -15,6 +18,5 @@ serde = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-bot-engine = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing-subscriber = { workspace = true }

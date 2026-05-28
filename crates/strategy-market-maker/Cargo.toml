@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+include.workspace = true
 description = "Skew-based market maker strategy"
 
 [dependencies]
@@ -13,6 +16,5 @@ rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
-
 
 

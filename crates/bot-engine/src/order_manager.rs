@@ -21,6 +21,7 @@ pub struct OrderManager {
 }
 
 impl OrderManager {
+    /// Create an empty order manager.
     pub fn new() -> Self {
         Self {
             orders: HashMap::new(),

@@ -121,7 +121,9 @@ impl DCAOrder {
 /// Deferred TP replacement to place after the previous TP is canceled.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingTakeProfit {
+    /// Replacement take-profit limit price.
     pub price: Price,
+    /// Replacement take-profit quantity.
     pub qty: Qty,
 }
 

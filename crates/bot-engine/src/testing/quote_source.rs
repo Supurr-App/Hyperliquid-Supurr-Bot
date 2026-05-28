@@ -36,6 +36,7 @@ pub struct MockQuoteSource {
 }
 
 impl MockQuoteSource {
+    /// Create an empty mock quote source.
     pub fn new() -> Self {
         Self {
             quotes: HashMap::new(),

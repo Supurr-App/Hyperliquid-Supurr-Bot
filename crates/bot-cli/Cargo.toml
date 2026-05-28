@@ -1,11 +1,15 @@
 [package]
-name = "bot-cli"
-version.workspace = true
+name = "hyperliquid-trading-bot"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "CLI runner for the trading bot"
+homepage.workspace = true
+repository.workspace = true
+readme = "README.md"
+include = ["Cargo.toml", "README.md", "src/**/*.rs"]
+description = "CLI runner for Hyperliquid trading bots"
 
 [[bin]]
 name = "bot"
@@ -39,4 +43,3 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }
 reqwest = { workspace = true }
-

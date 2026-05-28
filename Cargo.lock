@@ -180,30 +180,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bot-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bot-core",
- "bot-engine",
- "dotenvy",
- "exchange-hyperliquid",
- "reqwest",
- "rust_decimal",
- "rust_decimal_macros",
- "schemars",
- "serde",
- "serde_json",
- "strategy-arbitrage",
- "strategy-dca",
- "strategy-grid",
- "strategy-market-maker",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "bot-core"
 version = "0.1.0"
 dependencies = [
@@ -1153,6 +1129,30 @@ dependencies = [
  "tokio",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "hyperliquid-trading-bot"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "bot-core",
+ "bot-engine",
+ "dotenvy",
+ "exchange-hyperliquid",
+ "reqwest",
+ "rust_decimal",
+ "rust_decimal_macros",
+ "schemars",
+ "serde",
+ "serde_json",
+ "strategy-arbitrage",
+ "strategy-dca",
+ "strategy-grid",
+ "strategy-market-maker",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2461,7 +2461,6 @@ name = "strategy-arbitrage"
 version = "0.1.0"
 dependencies = [
  "bot-core",
- "bot-engine",
  "rust_decimal",
  "rust_decimal_macros",
  "serde",
@@ -2475,7 +2474,6 @@ name = "strategy-dca"
 version = "0.1.0"
 dependencies = [
  "bot-core",
- "bot-engine",
  "rust_decimal",
  "rust_decimal_macros",
  "serde",
@@ -2489,7 +2487,6 @@ name = "strategy-grid"
 version = "0.1.0"
 dependencies = [
  "bot-core",
- "bot-engine",
  "rust_decimal",
  "rust_decimal_macros",
  "schemars",

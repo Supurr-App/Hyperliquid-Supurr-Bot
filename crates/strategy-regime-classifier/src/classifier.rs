@@ -97,11 +97,17 @@ impl Default for RegimeClassifierConfig {
 /// Snapshot of all indicator values at a given bar.
 #[derive(Debug, Clone)]
 pub struct RegimeSnapshot {
+    /// Debounced market regime.
     pub regime: Regime,
+    /// Average Directional Index value.
     pub adx: f64,
+    /// Average True Range value.
     pub atr: f64,
+    /// Percentile rank of current ATR within retained history.
     pub atr_percentile: f64,
+    /// Bollinger Band width as a fraction of the average band value.
     pub bb_width: f64,
+    /// Percentile rank of current Bollinger width within retained history.
     pub bb_width_percentile: f64,
 }
 
@@ -130,6 +136,11 @@ pub struct RegimeClassifier {
 
 impl RegimeClassifier {
     /// Create a new classifier with the given configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ATR or Bollinger Bands periods/multiplier are rejected by
+    /// the `ta` crate.
     pub fn new(config: RegimeClassifierConfig) -> Self {
         let atr = AverageTrueRange::new(config.atr_period).expect("Invalid ATR period");
         let bb = BollingerBands::new(config.bb_period, config.bb_multiplier)

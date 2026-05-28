@@ -47,67 +47,106 @@ struct DeferredActionLimitCommand {
 /// Individual fill record for backtest results (serialized to frontend)
 #[derive(Debug, Clone, Serialize)]
 pub struct BacktestFill {
+    /// Fill timestamp in milliseconds.
     pub ts_ms: i64,
+    /// Fill price as a decimal string.
     pub price: String,
+    /// Fill quantity as a decimal string.
     pub qty: String,
+    /// Fill side.
     pub side: String,
     /// Legacy field: fee asset/currency.
     pub fee: String,
     /// Additive numeric fee amount for consumers that need fee math.
     pub fee_amount: String,
+    /// Fee currency.
     pub fee_currency: String,
 }
 
 /// Final position and PnL summary for one tracked instrument.
 #[derive(Debug, Clone, Serialize)]
 pub struct BacktestPositionSummary {
+    /// Instrument ID.
     pub instrument: String,
+    /// Final signed position quantity.
     pub final_position_qty: String,
+    /// Average entry price, if any position remains.
     pub avg_entry_price: Option<String>,
+    /// Realized PnL as a decimal string.
     pub realized_pnl: String,
+    /// Unrealized PnL as a decimal string.
     pub unrealized_pnl: Option<String>,
+    /// Total fees as a decimal string.
     pub total_fees: String,
+    /// Net PnL as a decimal string.
     pub net_pnl: String,
 }
 
 /// Backtest result summary for JSON output
 #[derive(Debug, Clone, Serialize)]
 pub struct BacktestResult {
+    /// Serialized fill records.
     pub fills: Vec<BacktestFill>,
+    /// Number of fills.
     pub trade_count: usize,
+    /// Calculated performance metrics.
     pub metrics: PerformanceMetrics,
+    /// Benchmark context.
     pub benchmark: PerformanceBenchmark,
+    /// Equity curve.
     pub equity_curve: Vec<BacktestEquityPoint>,
+    /// Reconstructed closed trades.
     pub closed_trades: Vec<BacktestClosedTrade>,
+    /// Legacy single-instrument final position quantity.
     pub final_position_qty: String,
+    /// Legacy single-instrument average entry price.
     pub avg_entry_price: Option<String>,
+    /// Legacy single-instrument realized PnL.
     pub realized_pnl: String,
+    /// Legacy single-instrument unrealized PnL.
     pub unrealized_pnl: Option<String>,
+    /// Total fees as a decimal string.
     pub total_fees: String,
+    /// Total traded volume as a decimal string.
     pub total_volume: String,
+    /// Net PnL as a decimal string.
     pub net_pnl: String,
     #[serde(default)]
+    /// Position summaries by instrument.
     pub positions: Vec<BacktestPositionSummary>,
+    /// Strategy or runner exit reason.
     pub exit_reason: Option<String>,
 }
 
 /// Message from polling tasks to the main loop
 #[derive(Debug)]
 pub enum PollResult {
+    /// User fills were polled from an exchange.
     Fills {
+        /// Exchange instance.
         instance: ExchangeInstance,
+        /// Fills returned by the exchange.
         fills: Vec<Fill>,
     },
+    /// Quotes were polled from an exchange.
     Quotes {
+        /// Exchange instance.
         instance: ExchangeInstance,
+        /// Quotes returned by the exchange.
         quotes: Vec<Quote>,
     },
+    /// Exchange health changed.
     ExchangeHealth {
+        /// Exchange instance.
         instance: ExchangeInstance,
+        /// New health state.
         health: ExchangeHealth,
     },
+    /// Polling task returned an error.
     Error {
+        /// Exchange instance.
         instance: ExchangeInstance,
+        /// Error message.
         error: String,
     },
 }
@@ -198,6 +237,7 @@ pub struct EngineRunner {
 }
 
 impl EngineRunner {
+    /// Create an engine runner around a configured engine.
     pub fn new(engine: Engine, config: RunnerConfig) -> Self {
         let (shutdown_tx, shutdown_rx) = mpsc::unbounded();
         let fills_guard = PollGuard::new("fills", &config);

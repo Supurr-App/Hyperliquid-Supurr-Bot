@@ -12,7 +12,9 @@ use crate::performance_metrics::PerformanceMetricsSnapshot;
 /// Common result for sync operations (trait-level abstraction)
 #[derive(Debug, Clone)]
 pub struct TradeSyncResult {
+    /// Whether the sync succeeded.
     pub success: bool,
+    /// Upstream-calculated PnL, if returned.
     pub pnl: Option<f64>,
 }
 
@@ -55,7 +57,9 @@ pub trait TradeSync: Send + Sync {
 /// Common result for account sync operations
 #[derive(Debug, Clone)]
 pub struct AccountSyncResult {
+    /// Whether the sync succeeded.
     pub success: bool,
+    /// Upstream-calculated PnL, if returned.
     pub pnl: Option<f64>,
 }
 

@@ -17,35 +17,54 @@ use std::time::Duration;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OrchestratorCondition {
+    /// Passes when the selected instrument mid price is above `price`.
     PriceAbove {
+        /// Optional instrument override; defaults to the first leg instrument.
         #[serde(default)]
         instrument: Option<String>,
+        /// Strict lower bound for current mid price.
         price: Decimal,
     },
+    /// Passes when the selected instrument mid price is below `price`.
     PriceBelow {
+        /// Optional instrument override; defaults to the first leg instrument.
         #[serde(default)]
         instrument: Option<String>,
+        /// Strict upper bound for current mid price.
         price: Decimal,
     },
+    /// Passes when the selected instrument spread is below all supplied limits.
     SpreadBelow {
+        /// Optional instrument override; defaults to the first leg instrument.
         #[serde(default)]
         instrument: Option<String>,
+        /// Optional maximum spread in basis points.
         #[serde(default)]
         max_bps: Option<Decimal>,
+        /// Optional maximum absolute spread.
         #[serde(default)]
         max_abs: Option<Decimal>,
     },
+    /// Passes when an asset's available balance is above the threshold.
     BalanceAbove {
+        /// Asset symbol to inspect.
         asset: String,
+        /// Strict lower bound for available balance.
         available: Decimal,
     },
+    /// Passes when group PnL percentage is above the threshold.
     GroupPnlPctAbove {
+        /// PnL threshold in percentage units.
         pct: Decimal,
     },
+    /// Passes when group PnL percentage is below the threshold.
     GroupPnlPctBelow {
+        /// PnL threshold in percentage units.
         pct: Decimal,
     },
+    /// Passes after child strategies have been running for at least `secs`.
     MaxRunningTime {
+        /// Maximum running time in seconds.
         secs: u64,
     },
 }
@@ -53,10 +72,13 @@ pub enum OrchestratorCondition {
 /// Condition buckets controlling child lifecycle.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct OrchestratorConditions {
+    /// Conditions that must pass before child strategies start.
     #[serde(default)]
     pub start_conditions: Vec<OrchestratorCondition>,
+    /// Conditions that must remain true while the group is running.
     #[serde(default)]
     pub validation_conditions: Vec<OrchestratorCondition>,
+    /// Conditions that stop the group when they become true.
     #[serde(default)]
     pub risk_conditions: Vec<OrchestratorCondition>,
 }
@@ -73,6 +95,7 @@ pub struct GroupRiskConfig {
 }
 
 impl GroupRiskConfig {
+    /// Build risk settings with take-profit and stop-loss disabled.
     pub fn disabled(allocated_capital_quote: Decimal) -> Self {
         Self {
             allocated_capital_quote,
@@ -84,14 +107,18 @@ impl GroupRiskConfig {
 
 /// One child strategy leg owned by the parent orchestrator.
 pub struct OrchestratorLeg {
+    /// Stable leg identifier used in logs and child stop reasons.
     pub id: String,
+    /// Instrument that routes events to this leg.
     pub instrument: InstrumentId,
+    /// Child strategy instance owned by the orchestrator.
     pub strategy: Box<dyn Strategy>,
     started: bool,
     active: bool,
 }
 
 impl OrchestratorLeg {
+    /// Create a child strategy leg.
     pub fn new(
         id: impl Into<String>,
         instrument: InstrumentId,
@@ -120,10 +147,12 @@ pub struct BotOrchestrator {
 }
 
 impl BotOrchestrator {
+    /// Create an orchestrator with no explicit start/validation/risk conditions.
     pub fn new(id: StrategyId, legs: Vec<OrchestratorLeg>, risk: GroupRiskConfig) -> Self {
         Self::with_conditions(id, legs, risk, OrchestratorConditions::default())
     }
 
+    /// Create an orchestrator with explicit lifecycle conditions.
     pub fn with_conditions(
         id: StrategyId,
         legs: Vec<OrchestratorLeg>,
@@ -142,6 +171,7 @@ impl BotOrchestrator {
         }
     }
 
+    /// Return child strategy legs.
     pub fn legs(&self) -> &[OrchestratorLeg] {
         &self.legs
     }

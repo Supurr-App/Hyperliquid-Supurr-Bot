@@ -8,6 +8,7 @@ use crate::config::TickTraderConfig;
 use crate::state::{Phase, TickTraderState};
 use bot_core::*;
 
+/// Strategy that opens and closes a position after configured quote counts.
 pub struct TickTrader {
     config: TickTraderConfig,
     state: TickTraderState,
@@ -15,6 +16,7 @@ pub struct TickTrader {
 }
 
 impl TickTrader {
+    /// Create a tick trader strategy from validated or unvalidated config.
     pub fn new(config: TickTraderConfig) -> Self {
         Self {
             config,

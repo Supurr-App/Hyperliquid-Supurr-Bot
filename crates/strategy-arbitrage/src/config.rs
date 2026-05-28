@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// When the spread converges, it closes both positions for profit.
 ///
 /// Market information (exchange, instrument, index, metadata) is derived
-/// from the V2 `markets[]` array — `spot_market` and `perp_market`.
+/// from the V2 `markets[]` array: `spot_market` and `perp_market`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArbitrageConfig {
     /// Unique strategy identifier
@@ -21,10 +21,10 @@ pub struct ArbitrageConfig {
     // -------------------------------------------------------------------------
     // Market Configuration (from V2 markets[] array)
     // -------------------------------------------------------------------------
-    /// Spot market (markets[0] in V2 config)
+    /// Spot market (`markets[0]` in V2 config).
     pub spot_market: Market,
 
-    /// Perp market (markets[1] in V2 config)
+    /// Perp market (`markets[1]` in V2 config).
     pub perp_market: Market,
 
     /// Environment for exchange instance resolution

@@ -33,9 +33,13 @@ impl Default for OrderFailMode {
 /// Behavioral controls ("knobs") for testing
 #[derive(Debug, Clone)]
 pub struct MockKnobs {
+    /// Order failure mode.
     pub order_fail_mode: OrderFailMode,
+    /// Simulated exchange health.
     pub exchange_health: bot_core::ExchangeHealth,
+    /// Whether requests should timeout.
     pub should_timeout: bool,
+    /// Whether requests should rate limit.
     pub should_rate_limit: bool,
     /// Fill all orders immediately regardless of TIF (for backtesting)
     pub fill_all_immediately: bool,
@@ -63,6 +67,7 @@ struct Position {
 
 /// Pending order for price-crossing fill simulation
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct PendingOrder {
     oid: u64,
     order: OrderInput,
@@ -96,6 +101,7 @@ struct MockState {
     quote_queue: VecDeque<Quote>,
 
     // Pending limit orders (for realistic fill simulation)
+    #[allow(dead_code)]
     pending_orders: HashMap<u64, PendingOrder>,
 }
 
@@ -232,18 +238,22 @@ impl MockExchange {
 
     // === CONTROL METHODS (Test Knobs) ===
 
+    /// Set order failure behavior.
     pub async fn set_fail_mode(&self, mode: OrderFailMode) {
         self.inner.write().await.knobs.order_fail_mode = mode;
     }
 
+    /// Set simulated exchange health.
     pub async fn set_exchange_health(&self, health: bot_core::ExchangeHealth) {
         self.inner.write().await.knobs.exchange_health = health;
     }
 
+    /// Enable or disable simulated request timeouts.
     pub async fn set_should_timeout(&self, should_timeout: bool) {
         self.inner.write().await.knobs.should_timeout = should_timeout;
     }
 
+    /// Queue one placement error for the next order batch.
     pub async fn queue_place_order_error(&self, error: ExchangeError) {
         self.inner
             .write()
@@ -252,6 +262,7 @@ impl MockExchange {
             .push_back(Err(error));
     }
 
+    /// Queue one placement success for the next order batch.
     pub async fn queue_place_order_success(&self) {
         self.inner
             .write()
@@ -265,6 +276,7 @@ impl MockExchange {
         self.inner.write().await.knobs.fill_all_immediately = fill;
     }
 
+    /// Set the current mid price for a coin.
     pub async fn set_mid(&self, coin: &str, price: Decimal) {
         self.inner
             .write()
@@ -273,20 +285,24 @@ impl MockExchange {
             .insert(coin.to_string(), price);
     }
 
+    /// Set the mock exchange clock in milliseconds.
     pub async fn set_time(&self, time_ms: i64) {
         self.inner.write().await.time_ms = time_ms;
     }
 
+    /// Set an asset balance.
     pub async fn set_balance(&self, asset: AssetId, amount: Decimal) {
         self.inner.write().await.balances.insert(asset, amount);
     }
 
     // === VERIFICATION METHODS ===
 
+    /// Return all placed orders recorded by the mock.
     pub async fn placed_orders(&self) -> Vec<OrderInput> {
         self.inner.read().await.placed_orders.clone()
     }
 
+    /// Return the balance for one asset.
     pub async fn balance(&self, asset: &AssetId) -> Decimal {
         self.inner
             .read()
@@ -297,6 +313,7 @@ impl MockExchange {
             .unwrap_or_default()
     }
 
+    /// Return all fills recorded by the mock.
     pub async fn fills(&self) -> Vec<Fill> {
         self.inner.read().await.fills.clone()
     }

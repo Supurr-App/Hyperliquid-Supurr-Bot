@@ -18,6 +18,7 @@ use std::time::Duration;
 /// Blanket-implemented for `Vec<T>`, so `Vec<Fill>`, `Vec<Quote>`, etc.
 /// all satisfy this automatically.
 pub trait HasItems {
+    /// Return `true` when the poll result contains meaningful data.
     fn has_items(&self) -> bool;
 }
 

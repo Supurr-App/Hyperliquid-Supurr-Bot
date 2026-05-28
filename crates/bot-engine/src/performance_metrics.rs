@@ -6,70 +6,117 @@ use serde::{Deserialize, Serialize};
 
 const YEAR_MS: f64 = 365.0 * 24.0 * 60.0 * 60.0 * 1000.0;
 
+/// Equity curve point emitted by backtests.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacktestEquityPoint {
+    /// Timestamp in milliseconds.
     pub ts_ms: i64,
+    /// Account equity serialized as a decimal string.
     pub equity: String,
+    /// Net PnL serialized as a decimal string.
     pub net_pnl: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Optional reference price at this point.
     pub price: Option<String>,
 }
 
+/// Closed trade reconstructed from fill history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacktestClosedTrade {
+    /// Entry timestamp in milliseconds.
     pub entry_ts_ms: i64,
+    /// Exit timestamp in milliseconds.
     pub exit_ts_ms: i64,
+    /// Trade direction.
     pub side: String,
+    /// Closed quantity as a decimal string.
     pub qty: String,
+    /// Entry price as a decimal string.
     pub entry_price: String,
+    /// Exit price as a decimal string.
     pub exit_price: String,
+    /// Gross PnL before fees as a decimal string.
     pub gross_pnl: String,
+    /// Fees as a decimal string.
     pub fees: String,
+    /// Net PnL after fees as a decimal string.
     pub net_pnl: String,
 }
 
+/// Benchmark context for a performance snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceBenchmark {
+    /// First equity point timestamp.
     pub start_ts_ms: Option<i64>,
+    /// Last equity point timestamp.
     pub end_ts_ms: Option<i64>,
+    /// Duration between first and last equity points.
     pub duration_ms: Option<i64>,
+    /// Number of quote updates observed.
     pub quote_count: usize,
+    /// Starting balance as a decimal string.
     pub starting_balance_usdc: Option<String>,
+    /// Ending balance as a decimal string.
     pub ending_balance_usdc: Option<String>,
+    /// Instrument scope for the run.
     pub instrument: Option<String>,
 }
 
+/// Calculated performance metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceMetrics {
+    /// Return over the measured period.
     pub period_return_pct: Option<f64>,
+    /// Annualized percentage return.
     pub apr_pct: Option<f64>,
+    /// Simplified Sharpe ratio from equity returns.
     pub sharpe: Option<f64>,
+    /// Maximum drawdown as a percentage.
     pub max_drawdown_pct: Option<f64>,
+    /// Maximum drawdown in USDC as a decimal string.
     pub max_drawdown_usdc: String,
+    /// Percentage of closed trades with positive net PnL.
     pub win_rate_pct: Option<f64>,
+    /// Number of reconstructed closed trades.
     pub closed_trade_count: usize,
+    /// Number of winning closed trades.
     pub winning_trade_count: usize,
+    /// Number of losing closed trades.
     pub losing_trade_count: usize,
+    /// Number of fills included.
     pub fill_count: usize,
+    /// Total fees as a decimal string.
     pub total_fees: String,
+    /// Total traded volume as a decimal string.
     pub total_volume: String,
+    /// Net PnL as a decimal string.
     pub net_pnl: String,
+    /// Fees divided by total volume.
     pub fee_drag_pct: Option<f64>,
 }
 
+/// Serializable performance snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceMetricsSnapshot {
+    /// Payload schema version.
     pub schema_version: u32,
+    /// Run mode, such as `backtest`, `paper`, or `live`.
     pub mode: String,
+    /// Scope name for the snapshot.
     pub scope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Live/paper run start timestamp.
     pub run_started_at_ms: Option<i64>,
+    /// Calculated metrics.
     pub metrics: PerformanceMetrics,
+    /// Benchmark context.
     pub benchmark: PerformanceBenchmark,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Latest equity point when available.
     pub latest_equity: Option<BacktestEquityPoint>,
 }
 
+/// Incremental performance tracker.
 #[derive(Debug, Clone)]
 pub struct PerformanceTracker {
     mode: String,
@@ -82,6 +129,7 @@ pub struct PerformanceTracker {
 }
 
 impl PerformanceTracker {
+    /// Create a tracker for one run mode and optional starting balance.
     pub fn new(
         mode: impl Into<String>,
         starting_balance_usdc: Option<Decimal>,
@@ -104,12 +152,14 @@ impl PerformanceTracker {
         }
     }
 
+    /// Set the instrument if it has not already been set.
     pub fn set_instrument(&mut self, instrument: InstrumentId) {
         if self.instrument.is_none() {
             self.instrument = Some(instrument);
         }
     }
 
+    /// Record a new equity point.
     pub fn record_equity_point(&mut self, ts_ms: i64, price: Option<Decimal>, net_pnl: Decimal) {
         self.quote_count += 1;
 
@@ -125,6 +175,7 @@ impl PerformanceTracker {
         });
     }
 
+    /// Build a full performance snapshot from fills and positions.
     pub fn snapshot(
         &self,
         fills: &[OrderFilledEvent],
@@ -156,14 +207,17 @@ impl PerformanceTracker {
         }
     }
 
+    /// Return a copy of the equity curve.
     pub fn equity_curve(&self) -> Vec<BacktestEquityPoint> {
         self.equity_curve.clone()
     }
 
+    /// Reconstruct closed trades from fills.
     pub fn closed_trades(&self, fills: &[OrderFilledEvent]) -> Vec<BacktestClosedTrade> {
         build_closed_trades(fills)
     }
 
+    /// Calculate only the metrics block.
     pub fn metrics(
         &self,
         fills: &[OrderFilledEvent],
@@ -172,6 +226,7 @@ impl PerformanceTracker {
         self.snapshot(fills, positions).metrics
     }
 
+    /// Build benchmark context for the current run.
     pub fn benchmark(&self, net_pnl: Decimal) -> PerformanceBenchmark {
         let start_ts_ms = self.equity_curve.first().map(|p| p.ts_ms);
         let end_ts_ms = self.equity_curve.last().map(|p| p.ts_ms);
@@ -195,10 +250,12 @@ impl PerformanceTracker {
     }
 }
 
+/// Calculate total traded volume from fills.
 pub fn total_volume(fills: &[OrderFilledEvent]) -> Decimal {
     fills.iter().map(|fill| fill.qty.0 * fill.price.0).sum()
 }
 
+/// Reconstruct closed trades from ordered fills.
 pub fn build_closed_trades(fills: &[OrderFilledEvent]) -> Vec<BacktestClosedTrade> {
     let mut ordered = fills.to_vec();
     ordered.sort_by_key(|fill| fill.ts);

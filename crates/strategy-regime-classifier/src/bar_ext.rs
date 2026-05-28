@@ -11,13 +11,18 @@
 /// and `BollingerBands`.
 #[derive(Debug, Clone)]
 pub struct TaBar {
+    /// Bar open price.
     pub open: f64,
+    /// Bar high price.
     pub high: f64,
+    /// Bar low price.
     pub low: f64,
+    /// Bar close price.
     pub close: f64,
 }
 
 impl TaBar {
+    /// Create an OHLC bar wrapper for `ta` indicators.
     pub fn new(open: f64, high: f64, low: f64, close: f64) -> Self {
         Self {
             open,

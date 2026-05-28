@@ -19,7 +19,7 @@ pub use crate::account_syncer::SyncError;
 pub struct TradeSyncerConfig {
     /// Bot ID for upstream API
     pub bot_id: String,
-    /// Upstream API base URL (e.g., "https://api.example.com/bot-api")
+    /// Upstream API base URL (e.g., `<https://api.example.com/bot-api>`)
     pub upstream_url: String,
     /// Sync interval in milliseconds (default: 10000)
     pub sync_interval_ms: u64,
@@ -57,55 +57,82 @@ impl Default for TradeSyncerConfig {
 /// Trade format for upstream API (matches botRoutes.py Trade schema)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpstreamTrade {
+    /// Stable trade ID.
     pub trade_id: String,
+    /// Client order ID.
     pub client_order_id: String,
+    /// Venue/exchange order ID.
     pub venue_order_id: String,
+    /// Instrument ID.
     pub instrument_id: String,
+    /// Fill side.
     pub side: String,
+    /// Order type label.
     pub order_type: String,
+    /// Filled quantity string.
     pub qty: String,
+    /// Fill price string.
     pub price: String,
+    /// Quote notional string.
     pub quote_notional: String,
+    /// Fee amount string.
     pub fee: String,
+    /// Fee currency.
     pub fee_currency: String,
+    /// Liquidity role.
     pub liquidity: String,
+    /// Event timestamp in milliseconds.
     pub ts_event: i64,
 }
 
 /// Request payload for sync API
 #[derive(Debug, Clone, Serialize)]
 pub struct SyncRequest {
+    /// Trades to sync.
     pub trades: Vec<UpstreamTrade>,
+    /// Request timestamp in milliseconds.
     pub ts: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Current price, if known.
     pub current_price: Option<String>,
+    /// Whether this request marks bot shutdown.
     pub stop_bot: bool,
+    /// Shutdown reason when `stop_bot` is true.
     pub stop_reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Optional metrics or strategy metadata.
     pub metadata: Option<serde_json::Value>,
 }
 
 /// Response from sync API
 #[derive(Debug, Clone, Deserialize)]
 pub struct SyncResponse {
+    /// Last synced trade info.
     pub synced: SyncedInfo,
     #[serde(default)]
+    /// Upstream-calculated PnL.
     pub pnl: f64,
 }
 
 /// Info about last synced trade
 #[derive(Debug, Clone, Deserialize)]
 pub struct SyncedInfo {
+    /// Last synced trade ID.
     pub trade_id: String,
+    /// Last synced timestamp.
     pub ts: i64,
 }
 
 /// Response from sync API
 #[derive(Debug, Clone)]
 pub struct SyncResult {
+    /// Whether the sync succeeded.
     pub success: bool,
+    /// Upstream-calculated PnL, if returned.
     pub pnl: Option<f64>,
+    /// Last synced trade ID.
     pub last_synced_trade_id: Option<String>,
+    /// Number of trades synced.
     pub trades_synced: usize,
 }
 
@@ -215,6 +242,7 @@ impl TradeSyncer {
         self.pending_fills.len()
     }
 
+    /// Set the latest performance metrics snapshot for sync metadata.
     pub fn set_metrics_snapshot(&mut self, snapshot: Option<PerformanceMetricsSnapshot>) {
         self.metrics_snapshot = snapshot;
     }

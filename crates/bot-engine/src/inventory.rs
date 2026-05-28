@@ -7,7 +7,9 @@ use std::collections::HashMap;
 /// Reservation for an order
 #[derive(Debug, Clone)]
 pub struct Reservation {
+    /// Reserved asset.
     pub asset: AssetId,
+    /// Reserved amount.
     pub amount: Decimal,
 }
 
@@ -41,11 +43,14 @@ impl AccountBalance {
 /// Per-strategy allocation/budget
 #[derive(Debug, Clone)]
 pub struct StrategyAllocation {
+    /// Strategy that owns the allocation.
     pub strategy_id: StrategyId,
+    /// Budgeted amount by asset.
     pub budgets: HashMap<AssetId, Decimal>,
 }
 
 impl InventoryLedger {
+    /// Create an empty inventory ledger.
     pub fn new() -> Self {
         Self {
             balances: HashMap::new(),

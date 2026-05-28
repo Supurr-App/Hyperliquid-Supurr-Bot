@@ -8,14 +8,14 @@
 //!
 //! ### Required Environment Variables
 //!
-//! ```
+//! ```text
 //! HYPERLIQUID_PK=<your-private-key-hex-without-0x>
 //! HYPERLIQUID_ADDRESS=<your-wallet-address>
 //! ```
 //!
 //! ### Optional Environment Variables
 //!
-//! ```
+//! ```text
 //! ENVIRONMENT=testnet|mainnet          # default: testnet
 //! INSTRUMENT=BTC-PERP                  # default: BTC-PERP
 //! MARKET_INDEX=0                       # default: 0
@@ -53,9 +53,15 @@ use tracing_subscriber::EnvFilter;
 /// Trading mode: live, paper, or backtest
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TradingMode {
+    /// Send orders to the configured live exchange.
     Live,
+    /// Use live quotes but simulate local fills.
     Paper,
-    Backtest { prices_path: PathBuf },
+    /// Replay historical prices from a local file.
+    Backtest {
+        /// Path to the historical prices file.
+        prices_path: PathBuf,
+    },
 }
 
 impl Default for TradingMode {

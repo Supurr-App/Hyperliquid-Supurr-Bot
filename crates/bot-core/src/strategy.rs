@@ -1,12 +1,26 @@
-//! Strategy trait and context.
+//! Strategy trait and engine context.
+//!
+//! A strategy is a deterministic state machine. It receives [`Event`] values,
+//! reads current engine state through [`StrategyContext`], and emits commands
+//! through that same context.
+//!
+//! # Lifecycle
+//!
+//! ```text
+//! on_start -> on_event / on_timer ... -> on_stop
+//! ```
+//!
+//! Strategies should keep exchange I/O out of their implementation. Direct HTTP
+//! calls belong in exchange adapters.
 
 use crate::commands::*;
 use crate::events::Event;
 use crate::types::*;
 use std::time::Duration;
 
-/// Timer registration result
+/// Timer registration result.
 pub struct TimerHandle {
+    /// Timer ID that can be passed back to [`StrategyContext::cancel_timer`].
     pub id: TimerId,
 }
 

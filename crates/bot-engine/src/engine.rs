@@ -64,6 +64,7 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Create an empty engine with the supplied polling/backoff config.
     pub fn new(config: EngineConfig) -> Self {
         Self {
             config,

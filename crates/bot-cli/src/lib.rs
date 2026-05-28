@@ -1,7 +1,4 @@
-//! Bot CLI library exports.
-//!
-//! This crate provides the bot CLI runner and configuration types.
-//! The config module exports types used by both the CLI and schema generation.
+#![doc = include_str!("../README.md")]
 
 pub mod config;
 

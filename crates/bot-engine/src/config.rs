@@ -3,7 +3,7 @@
 //! This module contains:
 //! - `BotConfig` — V2 unified config format
 //! - Strategy-specific JSON config structs (GridConfigJson, DCAConfigJson, etc.)
-//! - `build_strategy()` — construct Box<dyn Strategy> from BotConfig
+//! - `build_strategy()` — construct `Box<dyn Strategy>` from BotConfig
 //! - `build_instrument_meta()` — construct InstrumentMeta from Market
 
 use anyhow::{Context, Result};
@@ -575,6 +575,7 @@ pub struct OrchestratorConfigJson {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OrchestratorChildConfigJson {
+    /// Grid child strategy plan.
     Grid {
         /// Optional stable child ID used in logs and strategy IDs.
         #[serde(default)]
@@ -584,6 +585,7 @@ pub enum OrchestratorChildConfigJson {
         /// Grid configuration for this child.
         grid: GridConfigJson,
     },
+    /// DCA child strategy plan.
     Dca {
         /// Optional stable child ID used in logs and strategy IDs.
         #[serde(default)]
@@ -630,7 +632,7 @@ pub struct BuilderFeeConfig {
 pub struct SyncConfigJson {
     /// Bot ID for upstream API (required if enabled)
     pub bot_id: String,
-    /// Upstream API base URL (e.g., "https://api.example.com/bot-api")
+    /// Upstream API base URL (e.g., `<https://api.example.com/bot-api>`)
     pub upstream_url: String,
     /// Sync interval in milliseconds (default: 10000)
     #[serde(default = "default_sync_interval_ms")]
@@ -892,6 +894,7 @@ fn build_grid_config_for_market(
     })
 }
 
+#[allow(dead_code)]
 fn build_dca_config_for_market(
     config: &BotConfig,
     dca_json: &DCAConfigJson,
@@ -906,7 +909,8 @@ fn build_dca_config_for_market(
             "short" => DCADirection::Short,
             _ => DCADirection::Long,
         },
-        trigger_price: Decimal::from_str(&dca_json.trigger_price).context("Invalid trigger_price")?,
+        trigger_price: Decimal::from_str(&dca_json.trigger_price)
+            .context("Invalid trigger_price")?,
         base_order_size: Decimal::from_str(&dca_json.base_order_size)
             .context("Invalid base_order_size")?,
         dca_order_size: Decimal::from_str(&dca_json.dca_order_size)
@@ -933,6 +937,7 @@ fn build_dca_config_for_market(
     })
 }
 
+#[allow(dead_code)]
 fn validate_dca_config_with_price_bounds(dca_config: &DCAConfig) -> Result<()> {
     let mut errors = dca_config.validate();
     push_price_bound_errors(
@@ -1540,6 +1545,7 @@ mod tests {
             start_conditions: Vec::new(),
             validation_conditions: Vec::new(),
             risk_conditions: Vec::new(),
+            children: Vec::new(),
             legs: Vec::new(),
         });
 
@@ -1565,6 +1571,7 @@ mod tests {
             start_conditions: Vec::new(),
             validation_conditions: Vec::new(),
             risk_conditions: Vec::new(),
+            children: Vec::new(),
             legs: vec![
                 OrchestratorLegConfigJson {
                     side: 0,
