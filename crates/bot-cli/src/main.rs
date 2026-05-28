@@ -37,13 +37,16 @@ use bot_engine::testing::{create_standalone_paper_exchange_with_id, ArcExchange,
 use bot_engine::{
     build_instrument_metas, build_strategy, BotConfig, Engine, EngineConfig, TradeSyncerConfig,
 };
+use chrono::{DateTime, NaiveDateTime};
 use exchange_hyperliquid::{
-    new_client_with_registration, BuilderFee, Hip3Config, HyperliquidConfig, OutcomeConfig,
+    new_client_with_registration, BuilderFee, Hip3Config, HyperliquidClient, HyperliquidConfig,
+    OutcomeConfig,
 };
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-use std::collections::HashMap;
+use serde_json::Value;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -405,6 +408,228 @@ fn quotes_from_multi_backtest_prices(
     quotes
 }
 
+fn normalize_epoch_ms(value: i64) -> Option<i64> {
+    if value > 1_000_000_000_000 {
+        Some(value)
+    } else if value > 1_000_000_000 {
+        Some(value * 1000)
+    } else {
+        None
+    }
+}
+
+fn parse_outcome_expiry_ms(value: &str) -> Option<i64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(epoch) = trimmed.parse::<i64>() {
+        return normalize_epoch_ms(epoch);
+    }
+
+    if let Ok(dt) = DateTime::parse_from_rfc3339(trimmed) {
+        return Some(dt.timestamp_millis());
+    }
+
+    NaiveDateTime::parse_from_str(trimmed, "%Y%m%d-%H%M")
+        .ok()
+        .map(|dt| dt.and_utc().timestamp_millis())
+}
+
+fn parse_expiry_value(value: &Value) -> Option<i64> {
+    match value {
+        Value::String(s) => parse_outcome_expiry_ms(s),
+        Value::Number(n) => n.as_i64().and_then(normalize_epoch_ms),
+        _ => None,
+    }
+}
+
+fn expiry_from_description(description: &str) -> Option<i64> {
+    description.split('|').find_map(|part| {
+        let (key, value) = part.split_once(':')?;
+        if key.trim() == "expiry" {
+            parse_outcome_expiry_ms(value)
+        } else {
+            None
+        }
+    })
+}
+
+fn expiry_from_meta_item(item: &Value) -> Option<i64> {
+    for key in [
+        "expiry",
+        "deadline",
+        "expiresAt",
+        "expiration",
+        "expirationTime",
+    ] {
+        if let Some(expiry) = item.get(key).and_then(parse_expiry_value) {
+            return Some(expiry);
+        }
+    }
+
+    item.get("description")
+        .and_then(Value::as_str)
+        .and_then(expiry_from_description)
+}
+
+fn question_contains_outcome(question: &Value, outcome_id: u32) -> bool {
+    let id = outcome_id as u64;
+    if question
+        .get("fallbackOutcome")
+        .and_then(Value::as_u64)
+        .is_some_and(|value| value == id)
+    {
+        return true;
+    }
+
+    ["namedOutcomes", "settledNamedOutcomes"].iter().any(|key| {
+        question
+            .get(*key)
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.iter().any(|item| item.as_u64() == Some(id)))
+    })
+}
+
+fn expiry_from_outcome_meta(meta: &Value, outcome_id: u32) -> Option<i64> {
+    if let Some(outcome) = meta
+        .get("outcomes")
+        .and_then(Value::as_array)
+        .and_then(|outcomes| {
+            outcomes.iter().find(|outcome| {
+                outcome.get("outcome").and_then(Value::as_u64) == Some(outcome_id as u64)
+            })
+        })
+    {
+        if let Some(expiry) = expiry_from_meta_item(outcome) {
+            return Some(expiry);
+        }
+    }
+
+    meta.get("questions")
+        .and_then(Value::as_array)
+        .and_then(|questions| {
+            questions
+                .iter()
+                .find(|question| question_contains_outcome(question, outcome_id))
+                .and_then(expiry_from_meta_item)
+        })
+}
+
+fn configured_outcome_ids(config: &BotConfig) -> Vec<u32> {
+    config
+        .markets
+        .iter()
+        .filter_map(|market| market.outcome_params().map(|(outcome_id, _, _)| outcome_id))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn explicit_outcome_expiry_ms(config: &BotConfig) -> Result<Option<i64>> {
+    config
+        .outcome_expiry
+        .as_deref()
+        .map(|expiry| {
+            parse_outcome_expiry_ms(expiry).with_context(|| {
+                format!(
+                    "Invalid outcome_expiry '{}'. Use RFC3339, YYYYMMDD-HHMM, or epoch ms.",
+                    expiry
+                )
+            })
+        })
+        .transpose()
+}
+
+async fn resolve_outcome_stop_at_ms(
+    config: &BotConfig,
+    trading_mode: &TradingMode,
+    hl_client: &HyperliquidClient,
+) -> Result<Option<i64>> {
+    let outcome_ids = configured_outcome_ids(config);
+    if outcome_ids.is_empty() || matches!(trading_mode, TradingMode::Backtest { .. }) {
+        return Ok(None);
+    }
+
+    let explicit_expiry_ms = explicit_outcome_expiry_ms(config)?;
+    let meta = hl_client
+        .fetch_outcome_meta()
+        .await
+        .context("Failed to fetch Hyperliquid outcome metadata for expiry validation")?;
+
+    let mut expiries = Vec::new();
+    for outcome_id in outcome_ids {
+        if let Some(expiry_ms) = expiry_from_outcome_meta(&meta, outcome_id) {
+            expiries.push(expiry_ms);
+        } else if let Some(expiry_ms) = explicit_expiry_ms {
+            tracing::warn!(
+                "Using explicit outcome_expiry for outcome_id={} because HL metadata has no parseable expiry",
+                outcome_id
+            );
+            expiries.push(expiry_ms);
+        } else {
+            anyhow::bail!(
+                "Missing parseable expiry for outcome_id={}; refusing to start live outcome bot",
+                outcome_id
+            );
+        }
+    }
+
+    Ok(expiries.into_iter().min())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_hl_compact_expiry_as_utc_ms() {
+        assert_eq!(
+            parse_outcome_expiry_ms("20260529-0600"),
+            Some(1_780_034_400_000)
+        );
+    }
+
+    #[test]
+    fn resolves_expiry_from_direct_outcome_description() {
+        let meta = serde_json::json!({
+            "outcomes": [{
+                "outcome": 116,
+                "description": "class:priceBinary|underlying:BTC|expiry:20260529-0600|targetPrice:72951"
+            }],
+            "questions": []
+        });
+
+        assert_eq!(
+            expiry_from_outcome_meta(&meta, 116),
+            Some(1_780_034_400_000)
+        );
+    }
+
+    #[test]
+    fn resolves_expiry_from_parent_question_description() {
+        let meta = serde_json::json!({
+            "outcomes": [{
+                "outcome": 118,
+                "description": "index:0"
+            }],
+            "questions": [{
+                "question": 22,
+                "description": "class:priceBucket|underlying:BTC|expiry:20260529-0600|priceThresholds:71492,74410",
+                "fallbackOutcome": 117,
+                "namedOutcomes": [118, 119, 120],
+                "settledNamedOutcomes": []
+            }]
+        });
+
+        assert_eq!(
+            expiry_from_outcome_meta(&meta, 118),
+            Some(1_780_034_400_000)
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Load .env file if present
@@ -556,6 +781,31 @@ async fn main() -> Result<()> {
             return Err(e.into());
         }
     };
+
+    let outcome_stop_at_ms =
+        match resolve_outcome_stop_at_ms(&config, &trading_mode, &hl_client).await {
+            Ok(stop_at_ms) => stop_at_ms,
+            Err(e) => {
+                tracing::error!("Outcome expiry validation failed: {}", e);
+                report_init_error(&config, &format!("outcome_expiry_invalid:{}", e)).await;
+                return Err(e);
+            }
+        };
+
+    if let Some(stop_at_ms) = outcome_stop_at_ms {
+        let now_ms = bot_core::now_ms();
+        if now_ms >= stop_at_ms {
+            let reason = format!("outcome_expired:{}", stop_at_ms);
+            tracing::warn!(
+                "Outcome market already expired (now_ms={}, stop_at_ms={})",
+                now_ms,
+                stop_at_ms
+            );
+            report_init_error(&config, &reason).await;
+            anyhow::bail!("Outcome market already expired; refusing to start");
+        }
+        tracing::info!("Outcome hard stop configured at epoch_ms={}", stop_at_ms);
+    }
 
     // Determine exchange based on trading mode
     // - Live: use real exchange directly
@@ -824,6 +1074,7 @@ async fn main() -> Result<()> {
             TradingMode::Paper | TradingMode::Backtest { .. } => strategy_metrics_capital_usdc
                 .or_else(|| Decimal::from_str(&sim_config.starting_balance_usdc).ok()),
         },
+        stop_at_ms: outcome_stop_at_ms,
         ..Default::default()
     };
 

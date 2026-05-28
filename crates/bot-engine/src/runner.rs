@@ -166,6 +166,10 @@ pub struct RunnerConfig {
     pub quote_poll_interval_ms: u64,
     /// Cleanup delay after strategy stop (ms) - time to wait for cleanup commands to complete
     pub cleanup_delay_ms: u64,
+    /// Optional hard stop timestamp in epoch milliseconds.
+    ///
+    /// Used for expiring markets such as Hyperliquid outcomes.
+    pub stop_at_ms: Option<i64>,
     /// Performance metrics mode label included in sync/backtest payloads.
     pub metrics_mode: String,
     /// Strategy-scoped starting USDC capital used for return/APR/equity metrics.
@@ -181,6 +185,7 @@ impl Default for RunnerConfig {
             backoff_multiplier: 2.0,
             quote_poll_interval_ms: 1000,
             cleanup_delay_ms: 5000, // 5 seconds for cleanup
+            stop_at_ms: None,
             metrics_mode: "live".to_string(),
             metrics_starting_balance_usdc: None,
         }
@@ -339,6 +344,28 @@ impl EngineRunner {
         self.shutdown_reason.as_deref()
     }
 
+    fn deadline_stop_reason(&self, now_ms: i64) -> Option<String> {
+        let stop_at_ms = self.config.stop_at_ms?;
+        if now_ms >= stop_at_ms {
+            Some(format!("outcome_expired:{}", stop_at_ms))
+        } else {
+            None
+        }
+    }
+
+    fn mark_deadline_shutdown_if_needed(&mut self, now_ms: i64) -> bool {
+        let Some(reason) = self.deadline_stop_reason(now_ms) else {
+            return false;
+        };
+
+        if self.shutdown_reason.as_deref() != Some(reason.as_str()) {
+            tracing::warn!("Runner hard stop reached: {}", reason);
+            self.shutdown_reason = Some(reason);
+        }
+        self.should_shutdown = true;
+        true
+    }
+
     /// Compute backtest results from engine state.
     /// Call after run() completes to get summary statistics.
     pub fn get_backtest_results(&self, instrument: &InstrumentId) -> BacktestResult {
@@ -451,9 +478,11 @@ impl EngineRunner {
             }
         }
 
-        // Start strategies
-        let start_cmds = self.engine.start_strategies();
-        self.execute_commands(start_cmds).await;
+        // Start strategies unless a hard deadline is already reached.
+        if !self.mark_deadline_shutdown_if_needed(bot_core::now_ms()) {
+            let start_cmds = self.engine.start_strategies();
+            self.execute_commands(start_cmds).await;
+        }
 
         // Take shutdown receiver
         let mut shutdown_rx = self.shutdown_rx.take().expect("run called twice");
@@ -479,7 +508,11 @@ impl EngineRunner {
             }
             // Check for shutdown from strategy stop
             if self.should_shutdown {
-                tracing::info!("Strategy requested shutdown");
+                tracing::info!("Shutdown requested");
+                break;
+            }
+
+            if self.mark_deadline_shutdown_if_needed(bot_core::now_ms()) {
                 break;
             }
 
@@ -1121,10 +1154,16 @@ impl EngineRunner {
         for cmd in cmds {
             match cmd {
                 Command::PlaceOrder(c) => {
+                    if self.mark_deadline_shutdown_if_needed(bot_core::now_ms()) {
+                        continue;
+                    }
                     let mut evs = self.execute_place(c).await;
                     followups.append(&mut evs);
                 }
                 Command::PlaceOrders(orders) => {
+                    if self.mark_deadline_shutdown_if_needed(bot_core::now_ms()) {
+                        continue;
+                    }
                     let mut evs = self.execute_place_batch(orders).await;
                     followups.append(&mut evs);
                 }
@@ -1694,6 +1733,22 @@ mod tests {
     use rust_decimal_macros::dec;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::time::timeout;
+
+    #[test]
+    fn deadline_guard_marks_runner_for_shutdown() {
+        let engine = Engine::new(EngineConfig::default());
+        let mut runner = EngineRunner::new(
+            engine,
+            RunnerConfig {
+                stop_at_ms: Some(10),
+                ..Default::default()
+            },
+        );
+
+        assert!(!runner.mark_deadline_shutdown_if_needed(9));
+        assert!(runner.mark_deadline_shutdown_if_needed(10));
+        assert_eq!(runner.shutdown_reason(), Some("outcome_expired:10"));
+    }
 
     struct DeferredPlacementProbeStrategy {
         id: StrategyId,

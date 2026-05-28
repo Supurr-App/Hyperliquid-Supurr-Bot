@@ -52,6 +52,13 @@ pub struct BotConfig {
     #[serde(default = "default_poll_delay_ms")]
     pub poll_delay_ms: u64,
 
+    /// Optional explicit outcome expiry override.
+    ///
+    /// Used only when Hyperliquid outcome metadata does not expose a machine-readable
+    /// expiry. Accepted by the bot as RFC3339, HL compact `YYYYMMDD-HHMM`, or epoch ms.
+    #[serde(default)]
+    pub outcome_expiry: Option<String>,
+
     // -------------------------------------------------------------------------
     // Strategy-specific config objects (only one should be set)
     // -------------------------------------------------------------------------

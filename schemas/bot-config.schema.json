@@ -118,6 +118,14 @@
         }
       ]
     },
+    "outcome_expiry": {
+      "description": "Optional explicit outcome expiry override.\n\nUsed only when Hyperliquid outcome metadata does not expose a machine-readable expiry. Accepted by the bot as RFC3339, HL compact `YYYYMMDD-HHMM`, or epoch ms.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "poll_delay_ms": {
       "description": "Polling delay in milliseconds",
       "default": 500,
@@ -446,6 +454,44 @@
         }
       }
     },
+    "InstrumentMetaConfig2": {
+      "description": "Configuration for instrument metadata (tick/lot sizes).",
+      "type": "object",
+      "required": [
+        "lot_size",
+        "tick_size"
+      ],
+      "properties": {
+        "lot_size": {
+          "description": "Lot size for quantity rounding",
+          "type": "string",
+          "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+        },
+        "min_notional": {
+          "description": "Minimum notional value",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+        },
+        "min_qty": {
+          "description": "Minimum quantity",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+        },
+        "tick_size": {
+          "description": "Tick size for price rounding",
+          "type": "string",
+          "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+        }
+      }
+    },
     "MMConfigJson": {
       "description": "Market Maker strategy configuration",
       "type": "object",
@@ -504,6 +550,218 @@
           ]
         }
       }
+    },
+    "Market": {
+      "description": "Unified market configuration — replaces scattered config fields.\n\nThis is the canonical representation of \"where to trade\". All exchange/market-type-specific details are encapsulated here.",
+      "oneOf": [
+        {
+          "description": "Hyperliquid exchange markets",
+          "type": "object",
+          "oneOf": [
+            {
+              "description": "Standard perpetual contract on main Hyperliquid.",
+              "type": "object",
+              "required": [
+                "base",
+                "index",
+                "type"
+              ],
+              "properties": {
+                "base": {
+                  "description": "Base asset (e.g., \"BTC\", \"ETH\")",
+                  "type": "string"
+                },
+                "index": {
+                  "description": "Asset index on Hyperliquid (e.g., 0 for BTC)",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0.0
+                },
+                "instrument_meta": {
+                  "description": "Instrument metadata (tick/lot sizes)",
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/InstrumentMetaConfig2"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "quote": {
+                  "description": "Quote asset (always \"USDC\" for main perps)",
+                  "default": "USDC",
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "perp"
+                  ]
+                }
+              }
+            },
+            {
+              "description": "Spot market on Hyperliquid.",
+              "type": "object",
+              "required": [
+                "base",
+                "index",
+                "type"
+              ],
+              "properties": {
+                "base": {
+                  "description": "Base asset (e.g., \"HYPE\", \"PURR\")",
+                  "type": "string"
+                },
+                "index": {
+                  "description": "Spot market index (e.g., 10107 for HYPE/USDC)",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0.0
+                },
+                "instrument_meta": {
+                  "description": "Instrument metadata (tick/lot sizes)",
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/InstrumentMetaConfig2"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "quote": {
+                  "description": "Quote asset (e.g., \"USDC\")",
+                  "default": "USDC",
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "spot"
+                  ]
+                }
+              }
+            },
+            {
+              "description": "HIP-3 builder-deployed perpetual DEX.",
+              "type": "object",
+              "required": [
+                "asset_index",
+                "base",
+                "dex",
+                "dex_index",
+                "quote",
+                "type"
+              ],
+              "properties": {
+                "asset_index": {
+                  "description": "Asset index within this DEX's meta.universe",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0.0
+                },
+                "base": {
+                  "description": "Base asset (e.g., \"BTC\", \"HFUN\")",
+                  "type": "string"
+                },
+                "dex": {
+                  "description": "DEX name (e.g., \"hyna\", \"hypurrfun\")",
+                  "type": "string"
+                },
+                "dex_index": {
+                  "description": "DEX index in perpDexs() array (starts at 1)",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0.0
+                },
+                "instrument_meta": {
+                  "description": "Instrument metadata (tick/lot sizes)",
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/InstrumentMetaConfig2"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "quote": {
+                  "description": "Quote currency (e.g., \"USDC\", \"USDE\", \"USDH\")",
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "hip3"
+                  ]
+                }
+              }
+            },
+            {
+              "description": "Prediction market outcome.\n\nOutcomes trade like spot but use asset ID = 100_000_000 + encoding, where encoding = 10 * outcome_id + side. Live outcome books quote in USDH.",
+              "type": "object",
+              "required": [
+                "name",
+                "outcome_id",
+                "side",
+                "type"
+              ],
+              "properties": {
+                "instrument_meta": {
+                  "description": "Instrument metadata (tick/lot sizes)",
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/InstrumentMetaConfig2"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "name": {
+                  "description": "Human-readable name (e.g., \"BTC > 69070\")",
+                  "type": "string"
+                },
+                "outcome_id": {
+                  "description": "Outcome ID from outcomeMeta (e.g., 516)",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0.0
+                },
+                "side": {
+                  "description": "Side: 0 = Yes, 1 = No",
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0.0
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "outcome"
+                  ]
+                }
+              }
+            }
+          ],
+          "required": [
+            "exchange"
+          ],
+          "properties": {
+            "exchange": {
+              "type": "string",
+              "enum": [
+                "hyperliquid"
+              ]
+            }
+          }
+        }
+      ]
     },
     "MarketConfig": {
       "description": "Market configuration (V2 format) — flat representation for JSON Schema.\n\nThe engine uses `bot_core::Market` (tagged enum) instead. This flat struct exists so the generated JSON Schema is clean for external consumers.",
@@ -594,10 +852,98 @@
         }
       }
     },
+    "OrchestratorChildConfigJson": {
+      "description": "Generic child strategy plan owned by the orchestrator.",
+      "oneOf": [
+        {
+          "description": "Grid child strategy plan.",
+          "type": "object",
+          "required": [
+            "grid",
+            "kind",
+            "market"
+          ],
+          "properties": {
+            "grid": {
+              "description": "Grid configuration for this child.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/GridConfigJson"
+                }
+              ]
+            },
+            "id": {
+              "description": "Optional stable child ID used in logs and strategy IDs.",
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "grid"
+              ]
+            },
+            "market": {
+              "description": "Market this child trades.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Market"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "description": "DCA child strategy plan.",
+          "type": "object",
+          "required": [
+            "dca",
+            "kind",
+            "market"
+          ],
+          "properties": {
+            "dca": {
+              "description": "DCA configuration for this child.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/DCAConfigJson"
+                }
+              ]
+            },
+            "id": {
+              "description": "Optional stable child ID used in logs and strategy IDs.",
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "dca"
+              ]
+            },
+            "market": {
+              "description": "Market this child trades.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Market"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
     "OrchestratorCondition": {
       "description": "Deterministic condition evaluated by the orchestrator from local engine state.",
       "oneOf": [
         {
+          "description": "Passes when the selected instrument mid price is above `price`.",
           "type": "object",
           "required": [
             "price",
@@ -605,6 +951,7 @@
           ],
           "properties": {
             "instrument": {
+              "description": "Optional instrument override; defaults to the first leg instrument.",
               "default": null,
               "type": [
                 "string",
@@ -612,6 +959,7 @@
               ]
             },
             "price": {
+              "description": "Strict lower bound for current mid price.",
               "type": "string",
               "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
             },
@@ -624,6 +972,7 @@
           }
         },
         {
+          "description": "Passes when the selected instrument mid price is below `price`.",
           "type": "object",
           "required": [
             "price",
@@ -631,6 +980,7 @@
           ],
           "properties": {
             "instrument": {
+              "description": "Optional instrument override; defaults to the first leg instrument.",
               "default": null,
               "type": [
                 "string",
@@ -638,6 +988,7 @@
               ]
             },
             "price": {
+              "description": "Strict upper bound for current mid price.",
               "type": "string",
               "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
             },
@@ -650,12 +1001,14 @@
           }
         },
         {
+          "description": "Passes when the selected instrument spread is below all supplied limits.",
           "type": "object",
           "required": [
             "type"
           ],
           "properties": {
             "instrument": {
+              "description": "Optional instrument override; defaults to the first leg instrument.",
               "default": null,
               "type": [
                 "string",
@@ -663,6 +1016,7 @@
               ]
             },
             "max_abs": {
+              "description": "Optional maximum absolute spread.",
               "default": null,
               "type": [
                 "string",
@@ -671,6 +1025,7 @@
               "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
             },
             "max_bps": {
+              "description": "Optional maximum spread in basis points.",
               "default": null,
               "type": [
                 "string",
@@ -687,6 +1042,7 @@
           }
         },
         {
+          "description": "Passes when an asset's available balance is above the threshold.",
           "type": "object",
           "required": [
             "asset",
@@ -695,9 +1051,11 @@
           ],
           "properties": {
             "asset": {
+              "description": "Asset symbol to inspect.",
               "type": "string"
             },
             "available": {
+              "description": "Strict lower bound for available balance.",
               "type": "string",
               "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
             },
@@ -710,6 +1068,7 @@
           }
         },
         {
+          "description": "Passes when group PnL percentage is above the threshold.",
           "type": "object",
           "required": [
             "pct",
@@ -717,6 +1076,7 @@
           ],
           "properties": {
             "pct": {
+              "description": "PnL threshold in percentage units.",
               "type": "string",
               "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
             },
@@ -729,6 +1089,7 @@
           }
         },
         {
+          "description": "Passes when group PnL percentage is below the threshold.",
           "type": "object",
           "required": [
             "pct",
@@ -736,6 +1097,7 @@
           ],
           "properties": {
             "pct": {
+              "description": "PnL threshold in percentage units.",
               "type": "string",
               "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
             },
@@ -748,6 +1110,7 @@
           }
         },
         {
+          "description": "Passes after child strategies have been running for at least `secs`.",
           "type": "object",
           "required": [
             "secs",
@@ -755,6 +1118,7 @@
           ],
           "properties": {
             "secs": {
+              "description": "Maximum running time in seconds.",
               "type": "integer",
               "format": "uint64",
               "minimum": 0.0
@@ -777,6 +1141,14 @@
           "description": "Static allocation mode for child legs. V1 supports \"static_50_50\".",
           "default": "static_50_50",
           "type": "string"
+        },
+        "children": {
+          "description": "Generic child strategy plans. V1 generic orchestrator supports grid and dca only.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/OrchestratorChildConfigJson"
+          }
         },
         "kind": {
           "description": "V1 kind: \"prediction_yes_no_grid\"",
@@ -914,7 +1286,7 @@
           "minimum": 0.0
         },
         "upstream_url": {
-          "description": "Upstream API base URL (e.g., \"https://api.example.com/bot-api\")",
+          "description": "Upstream API base URL (e.g., `<https://api.example.com/bot-api>`)",
           "type": "string"
         }
       }

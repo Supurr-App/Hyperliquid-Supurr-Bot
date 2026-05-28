@@ -1138,6 +1138,7 @@ dependencies = [
  "anyhow",
  "bot-core",
  "bot-engine",
+ "chrono",
  "dotenvy",
  "exchange-hyperliquid",
  "reqwest",
