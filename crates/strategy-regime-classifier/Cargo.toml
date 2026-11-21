@@ -11,6 +11,7 @@ include.workspace = true
 description = "Market regime classifier using ADX, ATR, and Bollinger Width indicators"
 
 [dependencies]
+fin-primitives = { version = "4.0.1", default-features = false, features = ["indicators"] }
 ta = "0.5"
 
 [dev-dependencies]
