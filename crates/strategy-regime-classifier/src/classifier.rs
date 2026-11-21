@@ -11,7 +11,8 @@
 
 use std::collections::VecDeque;
 
-use ta::indicators::{AverageTrueRange, BollingerBands, BollingerBandsOutput};
+use fin_primitives::signals::float::AtrF64;
+use ta::indicators::{BollingerBands, BollingerBandsOutput};
 use ta::Next;
 
 use crate::adx::Adx;
@@ -117,7 +118,7 @@ pub struct RegimeClassifier {
 
     // Indicators
     adx: Adx,
-    atr: AverageTrueRange,
+    atr: AtrF64,
     bb: BollingerBands,
 
     // Percentile tracking
@@ -142,7 +143,7 @@ impl RegimeClassifier {
     /// Panics if the ATR or Bollinger Bands periods/multiplier are rejected by
     /// the `ta` crate.
     pub fn new(config: RegimeClassifierConfig) -> Self {
-        let atr = AverageTrueRange::new(config.atr_period).expect("Invalid ATR period");
+        let atr = AtrF64::wilder(config.atr_period).expect("Invalid ATR period");
         let bb = BollingerBands::new(config.bb_period, config.bb_multiplier)
             .expect("Invalid Bollinger Bands config");
         let adx = Adx::new(config.adx_period);
@@ -174,7 +175,7 @@ impl RegimeClassifier {
         let bar = TaBar::new(open, high, low, close);
 
         // ── Feed indicators ──
-        let atr_val = self.atr.next(&bar);
+        let atr_val = self.atr.update(high, low, close);
         let bb_out: BollingerBandsOutput = self.bb.next(&bar);
         let adx_val = self.adx.update(high, low, close);
 
@@ -186,6 +187,7 @@ impl RegimeClassifier {
             }
             None => return None,
         };
+        let atr_val = atr_val?;
 
         // ── Compute Bollinger Width ──
         let bb_width = if bb_out.average != 0.0 {
@@ -503,34 +505,42 @@ mod tests {
 
     // ─── Correctness Tests ────────────────────────────────────────────
 
-    /// Cross-validate our ATR output against the ta crate's math.
-    /// Feed identical data through ta::AverageTrueRange directly and through
-    /// the classifier, then verify the ATR values match.
+    /// ATR must use Wilder smoothing (SMA seed of the first `period` true
+    /// ranges, then `atr = (prev * (n - 1) + tr) / n`), the same method the
+    /// ADX in this crate uses. Reference computed by hand from the definition.
     #[test]
     fn test_atr_correctness_cross_validation() {
-        use crate::bar_ext::TaBar;
-        use ta::indicators::AverageTrueRange;
-        use ta::Next;
-
         let period = 5;
-        let mut ta_atr = AverageTrueRange::new(period).unwrap();
 
-        // Known data: steady uptrend
+        // Uptrend with varying bar ranges so smoothing method matters.
         let bars: Vec<(f64, f64, f64, f64)> = (0..20)
             .map(|i| {
                 let base = 100.0 + (i as f64) * 1.5;
-                (base, base + 2.0, base - 1.0, base + 0.5)
+                let range = 1.0 + (i % 4) as f64;
+                (base, base + range, base - 1.0, base + 0.5)
             })
             .collect();
 
-        let mut ta_values = Vec::new();
-        for &(o, h, l, c) in &bars {
-            let bar = TaBar::new(o, h, l, c);
-            let val = ta_atr.next(&bar);
-            ta_values.push(val);
+        // Wilder reference: skip bar 0 (no previous close), seed with the
+        // mean of the next `period` true ranges, then Wilder-smooth.
+        let n = period as f64;
+        let mut wilder: Vec<Option<f64>> = vec![None; bars.len()];
+        let mut seed = Vec::new();
+        let mut prev_atr: Option<f64> = None;
+        for i in 1..bars.len() {
+            let (_, h, l, _) = bars[i];
+            let pc = bars[i - 1].3;
+            let tr = (h - l).max((h - pc).abs()).max((l - pc).abs());
+            prev_atr = match prev_atr {
+                Some(a) => Some((a * (n - 1.0) + tr) / n),
+                None => {
+                    seed.push(tr);
+                    (seed.len() == period).then(|| seed.iter().sum::<f64>() / n)
+                }
+            };
+            wilder[i] = prev_atr;
         }
 
-        // Now feed same data through classifier and compare ATR
         let config = RegimeClassifierConfig {
             atr_period: period,
             adx_period: 5,
@@ -542,20 +552,21 @@ mod tests {
         };
         let mut clf = RegimeClassifier::new(config);
 
+        let mut checked = 0;
         for (i, &(o, h, l, c)) in bars.iter().enumerate() {
             if let Some(snap) = clf.update(o, h, l, c) {
-                let ta_val = ta_values[i];
-                let diff = (snap.atr - ta_val).abs();
+                let want = wilder[i].expect("reference ATR seeded before ADX warmup");
                 assert!(
-                    diff < 0.001,
-                    "ATR mismatch at bar {}: classifier={:.4} ta={:.4} diff={:.6}",
+                    (snap.atr - want).abs() < 1e-9,
+                    "ATR mismatch at bar {}: classifier={:.6} wilder={:.6}",
                     i,
                     snap.atr,
-                    ta_val,
-                    diff
+                    want
                 );
+                checked += 1;
             }
         }
+        assert!(checked > 0, "classifier never produced a snapshot");
     }
 
     /// Cross-validate BB width: verify that our width formula
